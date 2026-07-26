@@ -431,6 +431,10 @@ const GLOBAL_CSS = `
 .lomuz-app button { font-family:inherit; }
 @keyframes lomuzSlideUp { from { transform:translateY(24px); opacity:0; } to { transform:translateY(0); opacity:1; } }
 @media (prefers-reduced-motion: reduce) { .lomuz-app * { animation:none !important; transition:none !important; } }
+.lomuz-shell { max-width: 480px; }
+@media (min-width: 640px) { .lomuz-shell { max-width: 600px; } }
+@media (min-width: 1024px) { .lomuz-shell { max-width: 760px; } }
+@media (min-width: 1440px) { .lomuz-shell { max-width: 900px; } }
 `;
 
 /* =========================================================================
@@ -1811,7 +1815,7 @@ function BottomNav({ page, setPage, onAdd, role }) {
   }
 
   return (
-    <div style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: 480 }}>
+    <div className="lomuz-shell" style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%' }}>
       <div style={{ position: 'relative', display: 'flex', justifyContent: 'space-around', alignItems: 'center', background: 'var(--surface)', borderTop: '1px solid var(--border)', padding: '8px 4px 10px' }}>
         {left.map(renderItem)}
         <div style={{ width: 58, flexShrink: 0 }} />
@@ -2165,7 +2169,7 @@ export default function App() {
   return (
     <div className="lomuz-app" style={{ minHeight: '100vh', display: 'flex', justifyContent: 'center' }}>
       <style>{GLOBAL_CSS}</style>
-      <div style={{ width: '100%', maxWidth: 480, minHeight: '100vh', position: 'relative', paddingBottom: 104 }}>
+      <div className="lomuz-shell" style={{ width: '100%', minHeight: '100vh', position: 'relative', paddingBottom: 104 }}>
         <TopBar role={role} nome={nome} onLogout={handleLogout} pageTitle={pageTitles[page]} />
         <main style={{ padding: '0 16px' }}>
           {page === 'inicio' && (
