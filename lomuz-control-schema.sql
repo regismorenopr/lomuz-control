@@ -17,7 +17,9 @@ create table profiles (
   created_at timestamptz default now()
 );
 
--- Vendedores: dados de comissão e meta, ligados a um perfil (quando a pessoa já tem login)
+-- Vendedores: dados de comissão e meta, ligados a um perfil (quando a pessoa já tem login).
+-- "ativo=false" mantém o histórico (vendas antigas continuam contando) mas
+-- tira a pessoa do ranking visível entre vendedores e da lista de convite.
 create table vendedores (
   id text primary key,
   profile_id uuid unique references profiles(id) on delete set null,
@@ -26,6 +28,7 @@ create table vendedores (
   comissao_percentual numeric not null default 0,
   meta_padrao numeric not null default 0,
   metas jsonb not null default '{}'::jsonb,
+  ativo boolean not null default true,
   created_at timestamptz default now()
 );
 
@@ -39,19 +42,78 @@ create table categories (
   created_at timestamptz default now()
 );
 
+-- Serviços: o que a empresa efetivamente vende, com a forma de cobrança
+-- natural de cada um. Planos sempre apontam pra um serviço.
+create table servicos (
+  id text primary key,
+  nome text not null,
+  tipo_cobranca text not null default 'unitaria' check (tipo_cobranca in ('recorrente', 'unitaria', 'por_hora')),
+  ativo boolean not null default true,
+  created_at timestamptz default now()
+);
+
+-- Ramos de negócio: classificação do cliente (comércio, indústria, etc.).
+create table ramos_negocio (
+  id text primary key,
+  nome text not null,
+  created_at timestamptz default now()
+);
+
+-- Índices de reajuste financeiro (IPCA, IGP-M...) usados no aviso anual de
+-- reajuste de contrato do cliente.
+create table indices_reajuste (
+  id text primary key,
+  nome text not null,
+  descricao text,
+  created_at timestamptz default now()
+);
+
 -- Planos negociados: cada plano tem preço e comissão pré-definidos pelo admin.
 -- O vendedor escolhe o plano ao lançar a venda e os campos vêm preenchidos;
--- o admin pode alterar tudo antes de aprovar.
+-- o admin pode alterar tudo antes de aprovar. categoria_id é só pra
+-- contabilidade/relatório; servico_id é o que está sendo vendido de fato.
 create table planos (
   id text primary key,
   nome text not null,
   valor numeric not null default 0,
   categoria_id text references categories(id) on delete set null,
+  servico_id text references servicos(id) on delete set null,
   comissao_percentual numeric not null default 0,
   contrato_meses int,
   recorrente boolean not null default false,
   frequencia text,
   ativo boolean not null default true,
+  created_at timestamptz default now()
+);
+
+-- Cadastro de clientes.
+create table clientes (
+  id text primary key,
+  nome_fantasia text not null,
+  razao_social text,
+  organizacao_rede text,
+  ramo_negocio_id text references ramos_negocio(id) on delete set null,
+  cidade text,
+  estado text,
+  endereco text,
+  contato_nome text,
+  contato_telefone text,
+  contato_email text,
+  indice_reajuste_id text references indices_reajuste(id) on delete set null,
+  ativo boolean not null default true,
+  observacoes text,
+  created_at timestamptz default now()
+);
+
+-- Planos/serviços vinculados a cada cliente, cada um com seu próprio
+-- ativo/inativo e desde quando o cliente tem aquele plano.
+create table cliente_planos (
+  id text primary key,
+  cliente_id text not null references clientes(id) on delete cascade,
+  plano_id text references planos(id) on delete set null,
+  servico_id text references servicos(id) on delete set null,
+  ativo boolean not null default true,
+  cliente_desde date,
   created_at timestamptz default now()
 );
 
@@ -131,7 +193,12 @@ create trigger on_auth_user_created
 alter table profiles enable row level security;
 alter table vendedores enable row level security;
 alter table categories enable row level security;
+alter table servicos enable row level security;
+alter table ramos_negocio enable row level security;
+alter table indices_reajuste enable row level security;
 alter table planos enable row level security;
+alter table clientes enable row level security;
+alter table cliente_planos enable row level security;
 alter table orientacoes enable row level security;
 alter table metas_equipe enable row level security;
 alter table transactions enable row level security;
@@ -171,6 +238,33 @@ create policy "Só admin edita categorias" on categories
 create policy "Só admin apaga categorias" on categories
   for delete using (public.is_admin());
 
+create policy "Todo mundo logado vê serviços" on servicos
+  for select using (auth.uid() is not null);
+create policy "Só admin gerencia serviços" on servicos
+  for insert with check (public.is_admin());
+create policy "Só admin edita serviços" on servicos
+  for update using (public.is_admin());
+create policy "Só admin apaga serviços" on servicos
+  for delete using (public.is_admin());
+
+create policy "Todo mundo logado vê ramos" on ramos_negocio
+  for select using (auth.uid() is not null);
+create policy "Só admin gerencia ramos" on ramos_negocio
+  for insert with check (public.is_admin());
+create policy "Só admin edita ramos" on ramos_negocio
+  for update using (public.is_admin());
+create policy "Só admin apaga ramos" on ramos_negocio
+  for delete using (public.is_admin());
+
+create policy "Todo mundo logado vê índices" on indices_reajuste
+  for select using (auth.uid() is not null);
+create policy "Só admin gerencia índices" on indices_reajuste
+  for insert with check (public.is_admin());
+create policy "Só admin edita índices" on indices_reajuste
+  for update using (public.is_admin());
+create policy "Só admin apaga índices" on indices_reajuste
+  for delete using (public.is_admin());
+
 create policy "Todo mundo logado vê planos" on planos
   for select using (auth.uid() is not null);
 create policy "Só admin cria planos" on planos
@@ -179,6 +273,47 @@ create policy "Só admin edita planos" on planos
   for update using (public.is_admin());
 create policy "Só admin apaga planos" on planos
   for delete using (public.is_admin());
+
+create policy "Todo mundo logado vê clientes" on clientes
+  for select using (auth.uid() is not null);
+create policy "Só admin gerencia clientes" on clientes
+  for insert with check (public.is_admin());
+create policy "Só admin edita clientes" on clientes
+  for update using (public.is_admin());
+create policy "Só admin apaga clientes" on clientes
+  for delete using (public.is_admin());
+
+create policy "Todo mundo logado vê cliente_planos" on cliente_planos
+  for select using (auth.uid() is not null);
+create policy "Só admin gerencia cliente_planos" on cliente_planos
+  for insert with check (public.is_admin());
+create policy "Só admin edita cliente_planos" on cliente_planos
+  for update using (public.is_admin());
+create policy "Só admin apaga cliente_planos" on cliente_planos
+  for delete using (public.is_admin());
+
+-- Visões seguras pro ranking de vendas entre vendedores: expõem só nome,
+-- comissão padrão e vendas aprovadas de vendedores ATIVOS — nada de e-mail
+-- de convite, metas, nem qualquer outra tabela. Criadas pelo dono (postgres,
+-- que ignora RLS) de propósito: é a exceção controlada que deixa um vendedor
+-- ver as vendas de outro sem abrir a tabela transactions inteira via policy.
+create or replace view public.vendedores_publico as
+select id, nome, comissao_percentual
+from vendedores
+where ativo = true;
+
+create or replace view public.transacoes_ranking_publico as
+select
+  t.id, t.valor, t.data, t.recorrente, t.frequencia, t.repeticoes,
+  t.ativacao, t.data_ativacao, t.dias_teste, t.data_cancelamento,
+  t.vendedor_id, t.plano_id, t.comissao_percentual,
+  t.tipo, t.status
+from transactions t
+join vendedores v on v.id = t.vendedor_id
+where t.tipo = 'receita' and t.status = 'aprovado' and v.ativo = true;
+
+grant select on public.vendedores_publico to authenticated;
+grant select on public.transacoes_ranking_publico to authenticated;
 
 create policy "Todo mundo logado vê orientações" on orientacoes
   for select using (auth.uid() is not null);

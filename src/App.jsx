@@ -151,6 +151,7 @@ function planoToRow(p) {
     nome: p.nome,
     valor: p.valor || 0,
     categoria_id: p.categoriaId || null,
+    servico_id: p.servicoId || null,
     comissao_percentual: p.comissaoPercentual || 0,
     contrato_meses: p.contratoMeses || null,
     recorrente: !!p.recorrente,
@@ -164,11 +165,91 @@ function rowToPlano(row) {
     nome: row.nome,
     valor: Number(row.valor) || 0,
     categoriaId: row.categoria_id,
+    servicoId: row.servico_id,
     comissaoPercentual: Number(row.comissao_percentual) || 0,
     contratoMeses: row.contrato_meses,
     recorrente: !!row.recorrente,
     frequencia: row.frequencia || 'mensal',
     ativo: row.ativo !== false,
+  };
+}
+
+function servicoToRow(s) {
+  return { id: s.id, nome: s.nome, tipo_cobranca: s.tipoCobranca || 'unitaria', ativo: s.ativo !== false };
+}
+function rowToServico(row) {
+  return { id: row.id, nome: row.nome, tipoCobranca: row.tipo_cobranca || 'unitaria', ativo: row.ativo !== false };
+}
+
+function ramoToRow(r) {
+  return { id: r.id, nome: r.nome };
+}
+function rowToRamo(row) {
+  return { id: row.id, nome: row.nome };
+}
+
+function indiceToRow(i) {
+  return { id: i.id, nome: i.nome, descricao: i.descricao || '' };
+}
+function rowToIndice(row) {
+  return { id: row.id, nome: row.nome, descricao: row.descricao || '' };
+}
+
+function clienteToRow(c) {
+  return {
+    id: c.id,
+    nome_fantasia: c.nomeFantasia,
+    razao_social: c.razaoSocial || null,
+    organizacao_rede: c.organizacaoRede || null,
+    ramo_negocio_id: c.ramoNegocioId || null,
+    cidade: c.cidade || null,
+    estado: c.estado || null,
+    endereco: c.endereco || null,
+    contato_nome: c.contatoNome || null,
+    contato_telefone: c.contatoTelefone || null,
+    contato_email: c.contatoEmail || null,
+    indice_reajuste_id: c.indiceReajusteId || null,
+    ativo: c.ativo !== false,
+    observacoes: c.observacoes || null,
+  };
+}
+function rowToCliente(row) {
+  return {
+    id: row.id,
+    nomeFantasia: row.nome_fantasia,
+    razaoSocial: row.razao_social || '',
+    organizacaoRede: row.organizacao_rede || '',
+    ramoNegocioId: row.ramo_negocio_id,
+    cidade: row.cidade || '',
+    estado: row.estado || '',
+    endereco: row.endereco || '',
+    contatoNome: row.contato_nome || '',
+    contatoTelefone: row.contato_telefone || '',
+    contatoEmail: row.contato_email || '',
+    indiceReajusteId: row.indice_reajuste_id,
+    ativo: row.ativo !== false,
+    observacoes: row.observacoes || '',
+  };
+}
+
+function clientePlanoToRow(cp) {
+  return {
+    id: cp.id,
+    cliente_id: cp.clienteId,
+    plano_id: cp.planoId || null,
+    servico_id: cp.servicoId || null,
+    ativo: cp.ativo !== false,
+    cliente_desde: cp.clienteDesde || null,
+  };
+}
+function rowToClientePlano(row) {
+  return {
+    id: row.id,
+    clienteId: row.cliente_id,
+    planoId: row.plano_id,
+    servicoId: row.servico_id,
+    ativo: row.ativo !== false,
+    clienteDesde: row.cliente_desde,
   };
 }
 
@@ -208,6 +289,7 @@ function vendedorToRow(v) {
     meta_padrao: v.metaPadrao,
     metas: v.metas || {},
     convite_email: v.conviteEmail || null,
+    ativo: v.ativo !== false,
   };
 }
 function rowToVendedor(row) {
@@ -219,6 +301,7 @@ function rowToVendedor(row) {
     metas: row.metas || {},
     conviteEmail: row.convite_email,
     profileId: row.profile_id,
+    ativo: row.ativo !== false,
   };
 }
 
@@ -1602,6 +1685,7 @@ function VendedorForm({ vendedor, onSubmit, onCancel }) {
   const [email, setEmail] = useState(vendedor?.conviteEmail || '');
   const [comissao, setComissao] = useState(vendedor?.comissaoPercentual ?? 5);
   const [meta, setMeta] = useState(vendedor?.metaPadrao ?? 10000);
+  const [ativo, setAtivo] = useState(vendedor?.ativo !== false);
   const [error, setError] = useState('');
 
   function submit() {
@@ -1615,6 +1699,7 @@ function VendedorForm({ vendedor, onSubmit, onCancel }) {
       comissaoPercentual: Number(comissao) || 0,
       metaPadrao: Number(meta) || 0,
       metas: vendedor?.metas || {},
+      ativo,
     });
   }
 
@@ -1626,7 +1711,7 @@ function VendedorForm({ vendedor, onSubmit, onCancel }) {
           <input type="email" style={{ ...inputStyle, opacity: 0.6 }} value={vendedor.conviteEmail || ''} disabled />
         </Field>
       ) : (
-        <Field label="E-mail para convite" hint="A pessoa deve criar a conta no app usando exatamente este e-mail.">
+        <Field label="E-mail para convite" hint="A pessoa deve criar a conta no app usando exatamente este e-mail. Deixe em branco pra cadastrar alguém sem login (ex.: histórico antigo).">
           <input type="email" style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="pessoa@email.com" />
         </Field>
       )}
@@ -1634,6 +1719,13 @@ function VendedorForm({ vendedor, onSubmit, onCancel }) {
       <Field label="Meta mensal padrão" hint="Você pode ajustar mês a mês depois, na tela de Previsão.">
         <CurrencyInput value={meta} onChange={setMeta} style={inputStyle} />
       </Field>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderTop: '1px solid var(--border)' }}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>Ativo</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>Inativo mantém o histórico de vendas, mas sai do ranking visível entre vendedores e da lista de convites.</div>
+        </div>
+        <Toggle checked={ativo} onChange={setAtivo} />
+      </div>
       {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{error}</div>}
       <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
         <Button variant="secondary" onClick={onCancel} style={{ flex: 1 }}>Cancelar</Button>
@@ -1775,6 +1867,13 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
   const totalCancelamentos6m = cancelamentos.reduce((s, c) => s + c.count, 0);
   const ranking = buildVendedorRanking(txs, data.vendedores, range.start, range.end, data.planos);
   const nenhumWidgetAtivo = role === 'admin' && !widgets.categorias && !widgets.ticketMedio && !widgets.receitaDespesa && !widgets.rankingVendedores && !widgets.cancelamentos;
+
+  // Ranking visível pro próprio vendedor: só nome, comissão e vendas de quem
+  // está ATIVO, vindo das views seguras (nunca a tabela transactions inteira).
+  const rankingPublico = data.rankingPublico || { vendedores: [], transacoes: [] };
+  const rankingEquipe = role !== 'admin'
+    ? buildVendedorRanking(rankingPublico.transacoes, rankingPublico.vendedores, range.start, range.end, data.planos)
+    : [];
 
   return (
     <div style={{ paddingTop: 12 }}>
@@ -1992,6 +2091,30 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
       </Panel>
 
       <MuralCard orientacoes={data.orientacoes} role={role} onEdit={onEditMural} />
+
+      {role !== 'admin' && (
+        <>
+          <SectionTitle icon={Users}>Ranking de vendas da equipe</SectionTitle>
+          {rankingEquipe.length === 0 ? (
+            <Card><p style={{ fontSize: 13, color: 'var(--ink-soft)', margin: 0 }}>Nenhum vendedor ativo com vendas no período.</p></Card>
+          ) : (
+            <Card style={{ padding: 0 }}>
+              {rankingEquipe.map((r, i) => (
+                <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: i === rankingEquipe.length - 1 ? 'none' : '1px solid var(--border)', background: r.id === currentVendedorId ? 'var(--surface-2)' : 'transparent' }}>
+                  <div style={{ width: 26, height: 26, borderRadius: '50%', background: i === 0 ? 'var(--gold-soft)' : 'var(--surface-2)', color: i === 0 ? 'var(--warning-strong)' : 'var(--ink-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 12, flexShrink: 0 }}>
+                    {i + 1}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.nome}{r.id === currentVendedorId ? ' (você)' : ''}</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--ink-soft)' }}>Comissão {formatCurrency(r.comissao)}</div>
+                  </div>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--positive)', whiteSpace: 'nowrap' }}>{formatCurrency(r.vendas)}</div>
+                </div>
+              ))}
+            </Card>
+          )}
+        </>
+      )}
 
       {txs.length === 0 ? (
         <EmptyState icon={Receipt} title="Comece por aqui" desc="Registre sua primeira receita ou despesa para ver seu saldo e gráficos." actionLabel="+ Novo lançamento" onAction={onAddClick} />
@@ -2605,7 +2728,9 @@ function EquipeForecast({ data, persist, askConfirm }) {
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
             <Chip active={selectedId === 'equipe'} onClick={() => setSelectedId('equipe')}>Equipe toda</Chip>
             {data.vendedores.map((v) => (
-              <Chip key={v.id} active={selectedId === v.id} onClick={() => setSelectedId(v.id)}>{v.nome}</Chip>
+              <Chip key={v.id} active={selectedId === v.id} onClick={() => setSelectedId(v.id)}>
+                {v.nome}{v.ativo === false ? ' (inativo)' : ''}
+              </Chip>
             ))}
           </div>
 
@@ -2759,11 +2884,13 @@ function PrevisaoPage({ data, role, currentVendedorId, persist, askConfirm }) {
    PÁGINA: CATEGORIAS
    ========================================================================= */
 
-function PlanoForm({ plano, categories, onSubmit, onCancel }) {
+function PlanoForm({ plano, categories, servicos, onSubmit, onCancel }) {
   const receitaCats = categories.filter((c) => c.tipo === 'receita');
+  const servicosAtivos = (servicos || []).filter((s) => s.ativo !== false);
   const [nome, setNome] = useState(plano?.nome || '');
   const [valor, setValor] = useState(plano?.valor != null ? String(plano.valor) : '');
   const [categoriaId, setCategoriaId] = useState(plano?.categoriaId || receitaCats[0]?.id || '');
+  const [servicoId, setServicoId] = useState(plano?.servicoId || servicosAtivos[0]?.id || '');
   const [comissao, setComissao] = useState(plano?.comissaoPercentual != null ? String(plano.comissaoPercentual) : '5');
   const [contratoMeses, setContratoMeses] = useState(plano?.contratoMeses != null ? String(plano.contratoMeses) : '');
   const [recorrente, setRecorrente] = useState(!!plano?.recorrente);
@@ -2774,11 +2901,13 @@ function PlanoForm({ plano, categories, onSubmit, onCancel }) {
   function submit() {
     if (!nome.trim()) { setError('Informe o nome do plano.'); return; }
     if (!valor || parseFloat(valor) <= 0) { setError('Informe o valor do plano.'); return; }
+    if (!servicoId) { setError('Escolha o serviço que este plano vende.'); return; }
     onSubmit({
       id: plano?.id || uid(),
       nome: nome.trim(),
       valor: parseFloat(valor) || 0,
       categoriaId: categoriaId || null,
+      servicoId,
       comissaoPercentual: parseFloat(comissao) || 0,
       contratoMeses: contratoMeses ? (parseInt(contratoMeses, 10) || null) : null,
       recorrente,
@@ -2798,7 +2927,13 @@ function PlanoForm({ plano, categories, onSubmit, onCancel }) {
           <Field label="Comissão (%)"><input type="number" min="0" max="100" step="0.5" style={inputStyle} value={comissao} onChange={(e) => setComissao(e.target.value)} /></Field>
         </div>
       </div>
-      <Field label="Categoria de receita">
+      <Field label="Serviço" hint="O que este plano vende de fato.">
+        <select value={servicoId} onChange={(e) => setServicoId(e.target.value)} style={inputStyle}>
+          {servicosAtivos.length === 0 && <option value="">Crie um serviço primeiro, na aba Serviços</option>}
+          {servicosAtivos.map((s) => <option key={s.id} value={s.id}>{s.nome}</option>)}
+        </select>
+      </Field>
+      <Field label="Categoria de receita" hint="Só pra contabilidade e relatórios financeiros.">
         <select value={categoriaId} onChange={(e) => setCategoriaId(e.target.value)} style={inputStyle}>
           {receitaCats.length === 0 && <option value="">Crie uma categoria de receita primeiro</option>}
           {receitaCats.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
@@ -2842,6 +2977,160 @@ function PlanoForm({ plano, categories, onSubmit, onCancel }) {
   );
 }
 
+const CADASTROS_TABS = [
+  { key: 'categorias', label: 'Categorias' },
+  { key: 'planos', label: 'Planos negociados' },
+  { key: 'servicos', label: 'Serviços' },
+  { key: 'ramos', label: 'Ramos de negócio' },
+  { key: 'indices', label: 'Índices de reajuste' },
+];
+function CadastrosTabNav({ subTab, setSubTab }) {
+  return (
+    <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+      {CADASTROS_TABS.map((t) => (
+        <Chip key={t.key} active={subTab === t.key} onClick={() => setSubTab(t.key)}>{t.label}</Chip>
+      ))}
+    </div>
+  );
+}
+
+// Aba genérica de cadastro simples (serviços, ramos de negócio, índices de
+// reajuste) — mesma estrutura de lista + formulário das categorias/planos,
+// mas com um Form específico por tipo já que os campos mudam.
+function CadastroSimplesTab({ subTab, setSubTab, config, onSave, onRemove }) {
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const { itens, titulo, desc, Form, renderLinha } = config;
+
+  return (
+    <div style={{ paddingTop: 12 }}>
+      <CadastrosTabNav subTab={subTab} setSubTab={setSubTab} />
+      <p style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 14, lineHeight: 1.5 }}>{desc}</p>
+
+      {itens.length === 0 ? (
+        <EmptyState icon={Tag} title={titulo} desc="Toque no botão abaixo para criar o primeiro." actionLabel="+ Novo" onAction={() => { setEditing(null); setShowForm(true); }} />
+      ) : (
+        <Card style={{ padding: 0 }}>
+          {itens.map((item, i) => {
+            const linha = renderLinha(item);
+            return (
+              <div key={item.id} style={{ padding: 14, borderBottom: i === itens.length - 1 ? 'none' : '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{item.nome}</div>
+                  {linha && <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{linha}</div>}
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                  <button onClick={() => { setEditing(item); setShowForm(true); }} style={iconBtnStyle}><Edit2 size={15} /></button>
+                  <button onClick={() => onRemove(item.id)} style={iconBtnStyle}><Trash2 size={15} /></button>
+                </div>
+              </div>
+            );
+          })}
+        </Card>
+      )}
+
+      {itens.length > 0 && (
+        <Button variant="primary" onClick={() => { setEditing(null); setShowForm(true); }} style={{ width: '100%', marginTop: 16 }}>
+          <Plus size={16} /> Novo
+        </Button>
+      )}
+
+      {showForm && (
+        <Modal title={editing ? 'Editar' : 'Novo'} onClose={() => { setShowForm(false); setEditing(null); }}>
+          <Form
+            item={editing}
+            onSubmit={(item) => { onSave(item, editing); setShowForm(false); setEditing(null); }}
+            onCancel={() => { setShowForm(false); setEditing(null); }}
+          />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function ServicoForm({ item, onSubmit, onCancel }) {
+  const [nome, setNome] = useState(item?.nome || '');
+  const [tipoCobranca, setTipoCobranca] = useState(item?.tipoCobranca || 'unitaria');
+  const [ativo, setAtivo] = useState(item?.ativo !== false);
+  const [error, setError] = useState('');
+
+  function submit() {
+    if (!nome.trim()) { setError('Informe o nome do serviço.'); return; }
+    onSubmit({ id: item?.id || uid(), nome: nome.trim(), tipoCobranca, ativo });
+  }
+
+  return (
+    <div>
+      <Field label="Nome do serviço"><input type="text" style={inputStyle} value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex.: Carro Som" /></Field>
+      <Field label="Forma de cobrança">
+        <select value={tipoCobranca} onChange={(e) => setTipoCobranca(e.target.value)} style={inputStyle}>
+          <option value="recorrente">Recorrente</option>
+          <option value="unitaria">Unitária</option>
+          <option value="por_hora">Por hora</option>
+        </select>
+      </Field>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderTop: '1px solid var(--border)' }}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>Disponível para novos planos</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>Desligue pra aposentar o serviço sem apagar o histórico</div>
+        </div>
+        <Toggle checked={ativo} onChange={setAtivo} />
+      </div>
+      {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{error}</div>}
+      <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+        <Button variant="secondary" onClick={onCancel} style={{ flex: 1 }}>Cancelar</Button>
+        <Button variant="primary" onClick={submit} style={{ flex: 2 }}>Salvar serviço</Button>
+      </div>
+    </div>
+  );
+}
+
+function RamoForm({ item, onSubmit, onCancel }) {
+  const [nome, setNome] = useState(item?.nome || '');
+  const [error, setError] = useState('');
+
+  function submit() {
+    if (!nome.trim()) { setError('Informe o nome do ramo.'); return; }
+    onSubmit({ id: item?.id || uid(), nome: nome.trim() });
+  }
+
+  return (
+    <div>
+      <Field label="Nome do ramo de negócio"><input type="text" style={inputStyle} value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex.: Comércio varejista" /></Field>
+      {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{error}</div>}
+      <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+        <Button variant="secondary" onClick={onCancel} style={{ flex: 1 }}>Cancelar</Button>
+        <Button variant="primary" onClick={submit} style={{ flex: 2 }}>Salvar ramo</Button>
+      </div>
+    </div>
+  );
+}
+
+function IndiceForm({ item, onSubmit, onCancel }) {
+  const [nome, setNome] = useState(item?.nome || '');
+  const [descricao, setDescricao] = useState(item?.descricao || '');
+  const [error, setError] = useState('');
+
+  function submit() {
+    if (!nome.trim()) { setError('Informe o nome do índice.'); return; }
+    onSubmit({ id: item?.id || uid(), nome: nome.trim(), descricao: descricao.trim() });
+  }
+
+  return (
+    <div>
+      <Field label="Nome do índice"><input type="text" style={inputStyle} value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex.: IPCA (12 meses acumulado)" /></Field>
+      <Field label="Descrição (opcional)">
+        <textarea rows={3} style={{ ...inputStyle, resize: 'vertical' }} value={descricao} onChange={(e) => setDescricao(e.target.value)} placeholder="De onde vem, quando costuma ser usado..." />
+      </Field>
+      {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{error}</div>}
+      <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+        <Button variant="secondary" onClick={onCancel} style={{ flex: 1 }}>Cancelar</Button>
+        <Button variant="primary" onClick={submit} style={{ flex: 2 }}>Salvar índice</Button>
+      </div>
+    </div>
+  );
+}
+
 function CategoriasPage({ data, persist, askConfirm }) {
   const [subTab, setSubTab] = useState('categorias');
   const [showForm, setShowForm] = useState(false);
@@ -2852,6 +3141,17 @@ function CategoriasPage({ data, persist, askConfirm }) {
   const receitaCats = data.categories.filter((c) => c.tipo === 'receita');
   const despesaCats = data.categories.filter((c) => c.tipo === 'despesa');
   const planos = data.planos || [];
+  const servicos = data.servicos || [];
+  const ramosNegocio = data.ramosNegocio || [];
+  const indicesReajuste = data.indicesReajuste || [];
+
+  function saveSimples(campo, item, editingItem) {
+    const list = editingItem ? (data[campo] || []).map((x) => (x.id === item.id ? item : x)) : [...(data[campo] || []), item];
+    persist({ ...data, [campo]: list });
+  }
+  function removeSimples(campo, id, msg) {
+    askConfirm(msg, () => persist({ ...data, [campo]: (data[campo] || []).filter((x) => x.id !== id) }));
+  }
 
   function save(cat) {
     const list = editing ? data.categories.map((c) => (c.id === cat.id ? cat : c)) : [...data.categories, cat];
@@ -2883,10 +3183,7 @@ function CategoriasPage({ data, persist, askConfirm }) {
   if (subTab === 'planos') {
     return (
       <div style={{ paddingTop: 12 }}>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-          <Chip active={false} onClick={() => setSubTab('categorias')}>Categorias</Chip>
-          <Chip active onClick={() => setSubTab('planos')}>Planos negociados</Chip>
-        </div>
+        <CadastrosTabNav subTab={subTab} setSubTab={setSubTab} />
         <p style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 14, lineHeight: 1.5 }}>
           Cadastre aqui os planos com preço e comissão já definidos. Quando o vendedor escolher um plano ao lançar a venda, os campos vêm preenchidos — e você pode ajustar qualquer coisa antes de aprovar.
         </p>
@@ -2897,6 +3194,7 @@ function CategoriasPage({ data, persist, askConfirm }) {
           <Card style={{ padding: 0 }}>
             {planos.map((p, i) => {
               const cat = data.categories.find((c) => c.id === p.categoriaId);
+              const serv = servicos.find((s) => s.id === p.servicoId);
               return (
                 <div key={p.id} style={{ padding: 14, borderBottom: i === planos.length - 1 ? 'none' : '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                   <div style={{ minWidth: 0 }}>
@@ -2905,6 +3203,7 @@ function CategoriasPage({ data, persist, askConfirm }) {
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>
                       {formatCurrency(p.valor)} · comissão {p.comissaoPercentual}%
+                      {serv ? ` · ${serv.nome}` : ''}
                       {cat ? ` · ${cat.nome}` : ''}
                       {p.contratoMeses ? ` · ${p.contratoMeses} meses` : ''}
                       {p.recorrente ? ' · recorrente' : ''}
@@ -2928,19 +3227,49 @@ function CategoriasPage({ data, persist, askConfirm }) {
 
         {showPlanoForm && (
           <Modal title={editingPlano ? 'Editar plano' : 'Novo plano negociado'} onClose={() => { setShowPlanoForm(false); setEditingPlano(null); }}>
-            <PlanoForm plano={editingPlano} categories={data.categories} onSubmit={savePlano} onCancel={() => { setShowPlanoForm(false); setEditingPlano(null); }} />
+            <PlanoForm plano={editingPlano} categories={data.categories} servicos={servicos} onSubmit={savePlano} onCancel={() => { setShowPlanoForm(false); setEditingPlano(null); }} />
           </Modal>
         )}
       </div>
     );
   }
 
+  if (subTab === 'servicos' || subTab === 'ramos' || subTab === 'indices') {
+    const config = {
+      servicos: {
+        campo: 'servicos', itens: servicos, titulo: 'Nenhum serviço cadastrado',
+        desc: 'Serviços são o que a empresa vende de fato — cada plano negociado aponta para um serviço.',
+        Form: ServicoForm,
+        renderLinha: (s) => `${{ recorrente: 'Recorrente', unitaria: 'Unitária', por_hora: 'Por hora' }[s.tipoCobranca] || s.tipoCobranca}${s.ativo === false ? ' · inativo' : ''}`,
+      },
+      ramos: {
+        campo: 'ramosNegocio', itens: ramosNegocio, titulo: 'Nenhum ramo cadastrado',
+        desc: 'Ramos de negócio classificam o cliente (comércio, indústria, órgão público...). Usados no cadastro de clientes.',
+        Form: RamoForm,
+        renderLinha: () => null,
+      },
+      indices: {
+        campo: 'indicesReajuste', itens: indicesReajuste, titulo: 'Nenhum índice cadastrado',
+        desc: 'Índices financeiros usados no reajuste anual de contrato do cliente (padrão: IPCA acumulado 12 meses).',
+        Form: IndiceForm,
+        renderLinha: (ix) => ix.descricao || null,
+      },
+    }[subTab];
+
+    return (
+      <CadastroSimplesTab
+        key={subTab}
+        subTab={subTab} setSubTab={setSubTab}
+        config={config}
+        onSave={(item, editingItem) => saveSimples(config.campo, item, editingItem)}
+        onRemove={(id) => removeSimples(config.campo, id, `Remover este item?`)}
+      />
+    );
+  }
+
   return (
     <div style={{ paddingTop: 12 }}>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        <Chip active onClick={() => setSubTab('categorias')}>Categorias</Chip>
-        <Chip active={false} onClick={() => setSubTab('planos')}>Planos negociados</Chip>
-      </div>
+      <CadastrosTabNav subTab={subTab} setSubTab={setSubTab} />
       <p style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 14, lineHeight: 1.5 }}>
         Organize suas receitas e despesas em categorias para os gráficos e a previsão ficarem certinhos.
       </p>
@@ -3349,7 +3678,11 @@ export default function App() {
   async function loadData(s) {
     const userId = s.user.id;
     try {
-      const [profileRes, catRes, vendRes, txRes, planoRes, orientRes, metaEqRes] = await Promise.all([
+      const [
+        profileRes, catRes, vendRes, txRes, planoRes, orientRes, metaEqRes,
+        servRes, ramoRes, indiceRes, clienteRes, clientePlanoRes,
+        rankVendRes, rankTxRes,
+      ] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', userId).single(),
         supabase.from('categories').select('*').order('nome'),
         supabase.from('vendedores').select('*'),
@@ -3357,6 +3690,15 @@ export default function App() {
         supabase.from('planos').select('*').order('nome'),
         supabase.from('orientacoes').select('*'),
         supabase.from('metas_equipe').select('*'),
+        supabase.from('servicos').select('*').order('nome'),
+        supabase.from('ramos_negocio').select('*').order('nome'),
+        supabase.from('indices_reajuste').select('*').order('nome'),
+        supabase.from('clientes').select('*').order('nome_fantasia'),
+        supabase.from('cliente_planos').select('*'),
+        // Visões seguras: usadas pro ranking de vendas entre vendedores (nome,
+        // comissão e vendas só de quem está ativo — nunca dados de admin).
+        supabase.from('vendedores_publico').select('*'),
+        supabase.from('transacoes_ranking_publico').select('*'),
       ]);
       const metasEquipe = {};
       (metaEqRes.data || []).forEach((r) => { metasEquipe[r.mes] = Number(r.valor) || 0; });
@@ -3371,6 +3713,15 @@ export default function App() {
         planos: (planoRes.data || []).map(rowToPlano),
         orientacoes: (orientRes.data || []).map(rowToOrientacao),
         metasEquipe,
+        servicos: (servRes.data || []).map(rowToServico),
+        ramosNegocio: (ramoRes.data || []).map(rowToRamo),
+        indicesReajuste: (indiceRes.data || []).map(rowToIndice),
+        clientes: (clienteRes.data || []).map(rowToCliente),
+        clientePlanos: (clientePlanoRes.data || []).map(rowToClientePlano),
+        rankingPublico: {
+          vendedores: (rankVendRes.data || []).map((row) => ({ id: row.id, nome: row.nome, comissaoPercentual: Number(row.comissao_percentual) || 0 })),
+          transacoes: (rankTxRes.data || []).map(rowToTx),
+        },
         uiPrefs: {
           dashboardWidgets: (profile?.dashboard_widgets && Object.keys(profile.dashboard_widgets).length)
             ? profile.dashboard_widgets
@@ -3436,6 +3787,66 @@ export default function App() {
       }
       for (const p of prevPlanos) {
         if (!newPlanos.find((x) => x.id === p.id)) await supabase.from('planos').delete().eq('id', p.id);
+      }
+
+      // serviços
+      const prevServ = prev?.servicos || [];
+      const newServ = newData.servicos || [];
+      for (const s of newServ) {
+        const before = prevServ.find((x) => x.id === s.id);
+        if (!before) await supabase.from('servicos').insert(servicoToRow(s));
+        else if (JSON.stringify(before) !== JSON.stringify(s)) await supabase.from('servicos').update(servicoToRow(s)).eq('id', s.id);
+      }
+      for (const s of prevServ) {
+        if (!newServ.find((x) => x.id === s.id)) await supabase.from('servicos').delete().eq('id', s.id);
+      }
+
+      // ramos de negócio
+      const prevRamos = prev?.ramosNegocio || [];
+      const newRamos = newData.ramosNegocio || [];
+      for (const rm of newRamos) {
+        const before = prevRamos.find((x) => x.id === rm.id);
+        if (!before) await supabase.from('ramos_negocio').insert(ramoToRow(rm));
+        else if (JSON.stringify(before) !== JSON.stringify(rm)) await supabase.from('ramos_negocio').update(ramoToRow(rm)).eq('id', rm.id);
+      }
+      for (const rm of prevRamos) {
+        if (!newRamos.find((x) => x.id === rm.id)) await supabase.from('ramos_negocio').delete().eq('id', rm.id);
+      }
+
+      // índices de reajuste
+      const prevIndices = prev?.indicesReajuste || [];
+      const newIndices = newData.indicesReajuste || [];
+      for (const ix of newIndices) {
+        const before = prevIndices.find((x) => x.id === ix.id);
+        if (!before) await supabase.from('indices_reajuste').insert(indiceToRow(ix));
+        else if (JSON.stringify(before) !== JSON.stringify(ix)) await supabase.from('indices_reajuste').update(indiceToRow(ix)).eq('id', ix.id);
+      }
+      for (const ix of prevIndices) {
+        if (!newIndices.find((x) => x.id === ix.id)) await supabase.from('indices_reajuste').delete().eq('id', ix.id);
+      }
+
+      // clientes
+      const prevClientes = prev?.clientes || [];
+      const newClientes = newData.clientes || [];
+      for (const c of newClientes) {
+        const before = prevClientes.find((x) => x.id === c.id);
+        if (!before) await supabase.from('clientes').insert(clienteToRow(c));
+        else if (JSON.stringify(before) !== JSON.stringify(c)) await supabase.from('clientes').update(clienteToRow(c)).eq('id', c.id);
+      }
+      for (const c of prevClientes) {
+        if (!newClientes.find((x) => x.id === c.id)) await supabase.from('clientes').delete().eq('id', c.id);
+      }
+
+      // planos/serviços vinculados a cada cliente
+      const prevClientePlanos = prev?.clientePlanos || [];
+      const newClientePlanos = newData.clientePlanos || [];
+      for (const cp of newClientePlanos) {
+        const before = prevClientePlanos.find((x) => x.id === cp.id);
+        if (!before) await supabase.from('cliente_planos').insert(clientePlanoToRow(cp));
+        else if (JSON.stringify(before) !== JSON.stringify(cp)) await supabase.from('cliente_planos').update(clientePlanoToRow(cp)).eq('id', cp.id);
+      }
+      for (const cp of prevClientePlanos) {
+        if (!newClientePlanos.find((x) => x.id === cp.id)) await supabase.from('cliente_planos').delete().eq('id', cp.id);
       }
 
       // mural de orientação
