@@ -2,8 +2,17 @@
 <html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
+    <!-- Sem maximum-scale/user-scalable: o zoom até 200% precisa funcionar
+         (requisito de acessibilidade). O layout se adapta por media query. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Lomuz Control</title>
+    <meta name="description" content="Controle financeiro e gestão da equipe de vendas." />
+    <meta name="theme-color" content="#18112B" />
+
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
   </head>
   <body style="margin:0">
     <div id="root"></div>

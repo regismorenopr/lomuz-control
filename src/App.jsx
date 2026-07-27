@@ -7,10 +7,17 @@ import {
   Home, Receipt, TrendingUp, Tag, Plus, X, Calendar, ChevronRight, Repeat, Check,
   ArrowUpCircle, ArrowDownCircle, Users, Trash2, Edit2, Clock, Target, Upload,
   Utensils, Car, Film, HeartPulse, ShoppingBag, Briefcase, GraduationCap, Wallet,
-  Gift, Smartphone, PawPrint, MoreHorizontal, Sparkles, Megaphone, Pin, FileText
+  Gift, Smartphone, PawPrint, MoreHorizontal, Sparkles, Megaphone, Pin, FileText, Palette
 } from 'lucide-react';
 import Papa from 'papaparse';
 import { supabase } from './supabaseClient';
+import { GLOBAL_CSS } from './styles/tokens.js';
+import { AppShell, navItemsFor } from './components/AppShell.jsx';
+import { LogoHorizontal } from './brand/Logo.jsx';
+import {
+  StatCard, TrendIndicator, StatusBadge, CashFlowChart, Panel, PanelLink,
+  EmptyBlock, NotAvailableBlock, StatCardSkeleton, Skeleton, formatBRL,
+} from './components/dashboard.jsx';
 
 /* =========================================================================
    UTILITÁRIOS DE DATA E FORMATAÇÃO
@@ -305,6 +312,62 @@ function getPeriodRange(period) {
   }
 }
 
+// Janela imediatamente anterior, do mesmo tamanho — base da comparação "vs
+// período anterior" nos cartões. Para mês/mês usa o mês calendário anterior;
+// para intervalos livres, desloca a janela pela própria duração.
+function getPreviousPeriodRange(period) {
+  const today = new Date();
+  switch (period.type) {
+    case 'mes_atual': {
+      const m = addMonths(today, -1);
+      return { start: startOfMonth(m), end: endOfMonth(m) };
+    }
+    case 'mes_passado': {
+      const m = addMonths(today, -2);
+      return { start: startOfMonth(m), end: endOfMonth(m) };
+    }
+    case 'ultimos_3':
+      return { start: startOfMonth(addMonths(today, -5)), end: endOfMonth(addMonths(today, -3)) };
+    case 'ano_atual':
+      return { start: new Date(today.getFullYear() - 1, 0, 1), end: new Date(today.getFullYear() - 1, 11, 31) };
+    case 'custom': {
+      const atual = getPeriodRange(period);
+      const dias = Math.max(1, Math.round((atual.end - atual.start) / 86400000) + 1);
+      return { start: addDays(atual.start, -dias), end: addDays(atual.start, -1) };
+    }
+    default: {
+      const m = addMonths(today, -1);
+      return { start: startOfMonth(m), end: endOfMonth(m) };
+    }
+  }
+}
+
+// Variação percentual entre dois valores. Retorna null quando não há base de
+// comparação (anterior zerado), para o cartão dizer isso em vez de mostrar
+// um "+100%" enganoso.
+function variacaoPct(atual, anterior) {
+  if (!anterior || anterior === 0) return null;
+  return ((atual - anterior) / Math.abs(anterior)) * 100;
+}
+
+// Saldo acumulado: tudo que entrou menos tudo que saiu, desde sempre até hoje.
+// Não é saldo bancário conciliado — o app não tem conta bancária integrada —
+// e o cartão diz isso na dica de contexto.
+function saldoAcumuladoAteHoje(transactions) {
+  const inicio = new Date(2000, 0, 1);
+  const hoje = new Date();
+  const rec = sumByPeriod(transactions, 'receita', inicio, hoje).total;
+  const desp = sumByPeriod(transactions, 'despesa', inicio, hoje).total;
+  return round2(rec - desp);
+}
+
+// Entradas x saídas mês a mês, no formato que o gráfico de fluxo de caixa usa.
+function buildCashFlowRows(transactions, monthsBack) {
+  return buildCompanyEvolution(transactions, monthsBack).map((r) => ({
+    key: r.key, label: r.label, entradas: r.receita, saidas: r.despesa,
+  }));
+}
+
 function buildCategoryForecastRows(transactions, categoryIds, monthsCount) {
   const today = new Date();
   const rows = [];
@@ -519,7 +582,7 @@ const ICON_MAP = {
   trending: TrendingUp, gift: Gift, phone: Smartphone, paw: PawPrint, more: MoreHorizontal,
 };
 const ICON_CHOICES = ['utensils', 'car', 'home', 'film', 'heart', 'shopping', 'briefcase', 'grad', 'wallet', 'trending', 'gift', 'phone', 'paw', 'more'];
-const COLOR_CHOICES = ['#0E6B52', '#2F9E6E', '#A8404A', '#B5652E', '#8B4A6B', '#6B5B95', '#2E6B8B', '#C89B3C', '#4A6B8B', '#7A6A58'];
+const COLOR_CHOICES = ['#6D28D9', '#8B5CF6', '#4338CA', '#2563EB', '#15803D', '#0D9488', '#D97706', '#DC2626', '#DB2777', '#667085'];
 
 // Gráficos opcionais do painel (Admin) — todos ligados por padrão, o usuário pode desligar.
 const DEFAULT_DASHBOARD_WIDGETS = {
@@ -530,51 +593,6 @@ const DEFAULT_DASHBOARD_WIDGETS = {
   cancelamentos: true,
 };
 
-function buildSeedData() {
-  const today = new Date();
-  const cat = (nome, tipo, icone, cor) => ({ id: uid(), nome, tipo, icone, cor });
-
-  const categories = [
-    cat('Alimentação', 'despesa', 'utensils', '#A8404A'),
-    cat('Transporte', 'despesa', 'car', '#B5652E'),
-    cat('Moradia', 'despesa', 'home', '#8B4A6B'),
-    cat('Lazer', 'despesa', 'film', '#6B5B95'),
-    cat('Saúde', 'despesa', 'heart', '#8B3A4A'),
-    cat('Outras despesas', 'despesa', 'more', '#7A6A58'),
-    cat('Vendas', 'receita', 'shopping', '#0E6B52'),
-    cat('Serviços', 'receita', 'briefcase', '#2E8B6E'),
-    cat('Salário', 'receita', 'wallet', '#3FA66C'),
-    cat('Outras receitas', 'receita', 'more', '#5FA37E'),
-  ];
-  const byName = (n) => categories.find((c) => c.nome === n).id;
-
-  const vendedores = [
-    { id: uid(), nome: 'Ana Souza', comissaoPercentual: 5, metaPadrao: 15000, metas: {} },
-    { id: uid(), nome: 'Carlos Lima', comissaoPercentual: 8, metaPadrao: 20000, metas: {} },
-  ];
-
-  const d = (offsetDays) => toISODate(addDays(today, offsetDays));
-  const tx = (over) => ({
-    id: uid(), tipo: 'despesa', descricao: '', data: toISODate(today), recorrente: false,
-    frequencia: null, repeticoes: null, ativacao: 'imediata', dataAtivacao: null, diasTeste: null, vendedorId: null,
-    ...over,
-  });
-
-  const transactions = [
-    tx({ tipo: 'despesa', valor: 1450, categoriaId: byName('Moradia'), descricao: 'Aluguel', data: d(-3), recorrente: true, frequencia: 'mensal', ativacao: 'imediata' }),
-    tx({ tipo: 'despesa', valor: 89.9, categoriaId: byName('Lazer'), descricao: 'Streaming', data: d(-20), recorrente: true, frequencia: 'mensal', ativacao: 'imediata' }),
-    tx({ tipo: 'despesa', valor: 620, categoriaId: byName('Alimentação'), descricao: 'Supermercado', data: d(-5) }),
-    tx({ tipo: 'despesa', valor: 180, categoriaId: byName('Transporte'), descricao: 'Combustível', data: d(-8) }),
-    tx({ tipo: 'despesa', valor: 250, categoriaId: byName('Saúde'), descricao: 'Farmácia', data: d(-12) }),
-    tx({ tipo: 'receita', valor: 6200, categoriaId: byName('Salário'), descricao: 'Salário', data: d(-4), recorrente: true, frequencia: 'mensal', ativacao: 'imediata' }),
-    tx({ tipo: 'receita', valor: 3200, categoriaId: byName('Vendas'), descricao: 'Venda cliente A', data: d(-6), vendedorId: vendedores[0].id }),
-    tx({ tipo: 'receita', valor: 5100, categoriaId: byName('Vendas'), descricao: 'Venda cliente B', data: d(-15), vendedorId: vendedores[1].id }),
-    tx({ tipo: 'receita', valor: 2800, categoriaId: byName('Serviços'), descricao: 'Consultoria', data: d(-2), vendedorId: vendedores[0].id }),
-    tx({ tipo: 'despesa', valor: 59.9, categoriaId: byName('Lazer'), descricao: 'Academia (teste grátis)', data: d(1), recorrente: true, frequencia: 'mensal', ativacao: 'agendada', dataAtivacao: d(6), diasTeste: 7 }),
-  ];
-
-  return { categories, transactions, vendedores, uiPrefs: { role: 'admin', currentVendedorId: vendedores[0].id, dashboardWidgets: { ...DEFAULT_DASHBOARD_WIDGETS } } };
-}
 
 /* =========================================================================
    ESTILOS COMPARTILHADOS
@@ -591,30 +609,8 @@ const iconBtnStyle = {
 const thStyle = { textAlign: 'left', padding: '8px 10px', fontWeight: 700, color: 'var(--ink-soft)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontSize: 11.5 };
 const tdStyle = { padding: '8px 10px', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
 
-const GLOBAL_CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
-.lomuz-app { --bg:#F4F6F2; --surface:#FFFFFF; --surface-2:#EEF1EC; --ink:#13251F; --ink-soft:#5B6B64;
-  --brand:#0E6B52; --brand-soft:#E4F0EA; --positive:#2F9E6E; --positive-soft:#E3F5EC;
-  --negative:#A8404A; --negative-soft:#FBEAEB; --gold:#C89B3C; --gold-soft:#FBF3E1; --gold-strong:#8A6A1F; --border:#E3E7E1;
-  font-family:'Inter', system-ui, -apple-system, sans-serif; color:var(--ink); background:var(--bg); }
-.lomuz-app.lomuz-dark { --bg:#182922; --surface:#20362C; --surface-2:#2A4438; --ink:#EEF4F0; --ink-soft:#9CB0A5;
-  --brand:#3DBE8C; --brand-soft:#25422F; --positive:#4CC996; --positive-soft:#25422F;
-  --negative:#E58089; --negative-soft:#432A2A; --gold:#E0B968; --gold-soft:#3D3117; --gold-strong:#E0B968; --border:#35493D; }
-.lomuz-app .lomuz-display { font-family:'Fraunces', Georgia, serif; }
-.lomuz-app * { box-sizing:border-box; }
-.lomuz-app ::-webkit-scrollbar { height:6px; width:6px; }
-.lomuz-app ::-webkit-scrollbar-thumb { background:var(--border); border-radius:99px; }
-.lomuz-app input, .lomuz-app select, .lomuz-app button { outline:none; }
-.lomuz-app input:focus, .lomuz-app select:focus { border-color:var(--brand); box-shadow:0 0 0 3px var(--brand-soft); }
-.lomuz-app button:focus-visible { outline:2px solid var(--brand); outline-offset:2px; }
-.lomuz-app button { font-family:inherit; }
-@keyframes lomuzSlideUp { from { transform:translateY(24px); opacity:0; } to { transform:translateY(0); opacity:1; } }
-@media (prefers-reduced-motion: reduce) { .lomuz-app * { animation:none !important; transition:none !important; } }
-.lomuz-shell { max-width: 480px; }
-@media (min-width: 640px) { .lomuz-shell { max-width: 600px; } }
-@media (min-width: 1024px) { .lomuz-shell { max-width: 760px; } }
-@media (min-width: 1440px) { .lomuz-shell { max-width: 900px; } }
-`;
+// Os tokens visuais (cores, raios, sombras, grades e responsividade) ficam
+// centralizados em src/styles/tokens.js.
 
 /* =========================================================================
    COMPONENTES BÁSICOS (ÁTOMOS)
@@ -689,7 +685,7 @@ function EmptyState({ icon: Icon, title, desc, actionLabel, onAction }) {
   return (
     <Card style={{ marginTop: 16, textAlign: 'center', padding: '32px 20px' }}>
       <div style={{ width: 52, height: 52, borderRadius: '50%', background: 'var(--brand-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}>
-        <Icon size={22} color="var(--brand)" />
+        <Icon size={22} color="var(--primary-text)" />
       </div>
       <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6 }}>{title}</div>
       <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: actionLabel ? 18 : 0, lineHeight: 1.5 }}>{desc}</div>
@@ -705,7 +701,7 @@ function SectionTitle({ icon: Icon, children, action }) {
         {Icon && <Icon size={15} />} {children}
       </div>
       {action && (
-        <button onClick={action.onClick} style={{ background: 'none', border: 'none', color: 'var(--brand)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 2 }}>
+        <button onClick={action.onClick} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 2 }}>
           {action.label} <ChevronRight size={13} />
         </button>
       )}
@@ -715,10 +711,10 @@ function SectionTitle({ icon: Icon, children, action }) {
 
 function OptionCard({ active, title, desc, onClick, children }) {
   return (
-    <div onClick={onClick} style={{ border: active ? '2px solid var(--brand)' : '1px solid var(--border)', background: active ? 'var(--brand-soft)' : 'var(--surface)', borderRadius: 14, padding: 14, cursor: 'pointer' }}>
+    <div onClick={onClick} style={{ border: active ? '2px solid var(--primary-text)' : '1px solid var(--border)', background: active ? 'var(--brand-soft)' : 'var(--surface)', borderRadius: 14, padding: 14, cursor: 'pointer' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ width: 18, height: 18, borderRadius: '50%', border: `2px solid ${active ? 'var(--brand)' : 'var(--border)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          {active && <div style={{ width: 9, height: 9, borderRadius: '50%', background: 'var(--brand)' }} />}
+        <div style={{ width: 18, height: 18, borderRadius: '50%', border: `2px solid ${active ? 'var(--primary-text)' : 'var(--border)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          {active && <div style={{ width: 9, height: 9, borderRadius: '50%', background: 'var(--primary-text)' }} />}
         </div>
         <div style={{ fontWeight: 700, fontSize: 14 }}>{title}</div>
       </div>
@@ -777,9 +773,9 @@ function TransactionRow({ tx, category, last, onClick }) {
         <div style={{ fontSize: 12, color: 'var(--ink-soft)', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <span>{formatDateBR(tx.data)}</span>
           {tx.recorrente && <Repeat size={11} />}
-          {status === 'pendente' && <span style={{ color: '#8A6A1F', fontWeight: 700 }}>· Pendente</span>}
+          {status === 'pendente' && <span style={{ color: 'var(--warning-strong)', fontWeight: 700 }}>· Pendente</span>}
           {status === 'cancelado' && <span style={{ color: 'var(--negative)', fontWeight: 700 }}>· Cancelado</span>}
-          {tx.status === 'pendente' && <span style={{ color: '#8A6A1F', fontWeight: 700 }}>· Aguardando aprovação</span>}
+          {tx.status === 'pendente' && <span style={{ color: 'var(--warning-strong)', fontWeight: 700 }}>· Aguardando aprovação</span>}
           {tx.status === 'rejeitado' && <span style={{ color: 'var(--negative)', fontWeight: 700 }}>· Rejeitada</span>}
         </div>
       </div>
@@ -907,14 +903,14 @@ function VendedorPanoramaView({ vendedor, rows, isTeam, vendedoresCount, onEditM
   const msg = !isTeam && vendedor ? buildMotivationalMessage(rows, vendedor.nome) : null;
   const msgColors = {
     positive: { border: 'var(--positive)', bg: 'var(--positive-soft)' },
-    warning: { border: 'var(--gold)', bg: '#FBF3E1' },
+    warning: { border: 'var(--gold)', bg: 'var(--warning-light)' },
     negative: { border: 'var(--negative)', bg: 'var(--negative-soft)' },
     neutral: { border: 'var(--border)', bg: 'var(--surface-2)' },
   };
 
   return (
     <div>
-      <Card style={{ background: '#13251F', color: '#fff', border: 'none', marginBottom: 16 }}>
+      <Card style={{ background: 'var(--sidebar)', color: '#fff', border: 'none', marginBottom: 16 }}>
         <div style={{ fontSize: 11.5, opacity: 0.7, textTransform: 'uppercase', fontWeight: 700 }}>
           {isTeam ? `Equipe toda · ${vendedoresCount} vendedor(es)` : `${vendedor.nome} · comissão ${vendedor.comissaoPercentual}%`}
         </div>
@@ -925,7 +921,7 @@ function VendedorPanoramaView({ vendedor, rows, isTeam, vendedoresCount, onEditM
           </div>
           <div>
             <div style={{ fontSize: 11, opacity: 0.65 }}>Comissão a receber</div>
-            <div className="lomuz-display" style={{ fontSize: 22, color: '#8FE3B8' }}>{formatCurrency(totalComissao)}</div>
+            <div className="lomuz-display" style={{ fontSize: 22, color: '#C4B5FD' }}>{formatCurrency(totalComissao)}</div>
           </div>
         </div>
       </Card>
@@ -1008,7 +1004,7 @@ function AnexoLinks({ anexos, onError }) {
         <button
           key={a.path}
           onClick={() => abrirAnexo(a, onError)}
-          style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '6px 10px', fontSize: 12, fontWeight: 600, color: 'var(--brand)', cursor: 'pointer', maxWidth: '100%' }}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '6px 10px', fontSize: 12, fontWeight: 600, color: 'var(--primary-text)', cursor: 'pointer', maxWidth: '100%' }}
         >
           <FileText size={13} style={{ flexShrink: 0 }} />
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.nome}</span>
@@ -1132,7 +1128,7 @@ function MuralAdminModal({ orientacoes, persistOrientacoes, askConfirm }) {
         </Field>
 
         <Field label="Anexos em PDF" hint="Até 10 MB por arquivo. Só PDF.">
-          <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, border: '1px dashed var(--border)', borderRadius: 12, padding: 14, cursor: enviando ? 'default' : 'pointer', color: 'var(--brand)', fontSize: 13, fontWeight: 700 }}>
+          <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, border: '1px dashed var(--border)', borderRadius: 12, padding: 14, cursor: enviando ? 'default' : 'pointer', color: 'var(--primary-text)', fontSize: 13, fontWeight: 700 }}>
             <Upload size={15} />
             {enviando ? 'Enviando...' : 'Escolher PDF'}
             <input type="file" accept="application/pdf" disabled={enviando} onChange={(e) => { enviarPdf(e.target.files?.[0]); e.target.value = ''; }} style={{ display: 'none' }} />
@@ -1388,8 +1384,8 @@ function TransactionForm({ draft, categories, role, vendedores, planos, onSubmit
 
       {emRevisao ? (
         <>
-          <Card style={{ marginTop: 16, borderColor: '#C89B3C', background: '#FBF3E1' }}>
-            <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.5, color: '#6B5216' }}>
+          <Card style={{ marginTop: 16, borderColor: 'var(--warning)', background: 'var(--warning-light)' }}>
+            <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.5, color: 'var(--warning-strong)' }}>
               Esta venda foi lançada por um vendedor e está aguardando sua revisão. Ajuste o que precisar acima e depois aprove — só assim ela passa a contar no saldo, nas metas e na comissão.
             </p>
           </Card>
@@ -1440,7 +1436,7 @@ function ConfirmRecurrenceStep({ draft, category, onBack, onConfirm }) {
     <div>
       <Card style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-          <Repeat size={18} color="var(--brand)" />
+          <Repeat size={18} color="var(--primary-text)" />
           <span style={{ fontWeight: 700 }}>Lançamento recorrente</span>
         </div>
         <p style={{ fontSize: 14, lineHeight: 1.6, margin: 0 }}>
@@ -1483,7 +1479,7 @@ function ActivationStep({ draft, onBack, onConfirm }) {
               </div>
               <input type="number" min="1" value={dias} onChange={(e) => setDias(e.target.value)} style={inputStyle} />
               {previewDate && (
-                <p style={{ fontSize: 12, color: 'var(--brand)', marginTop: 8, fontWeight: 700 }}>
+                <p style={{ fontSize: 12, color: 'var(--primary-text)', marginTop: 8, fontWeight: 700 }}>
                   Começa a valer em {formatDateBR(previewDate)} · fica pendente até lá
                 </p>
               )}
@@ -1666,6 +1662,17 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
   const despesas = sumByPeriod(txs, 'despesa', range.start, range.end);
   const receitas = sumByPeriod(txs, 'receita', range.start, range.end);
   const saldo = round2(receitas.total - despesas.total);
+
+  // Comparação com a janela anterior de mesmo tamanho (alimenta os cartões).
+  const rangeAnterior = getPreviousPeriodRange(period);
+  const receitasAnt = sumByPeriod(txs, 'receita', rangeAnterior.start, rangeAnterior.end);
+  const despesasAnt = sumByPeriod(txs, 'despesa', rangeAnterior.start, rangeAnterior.end);
+  const varReceitas = variacaoPct(receitas.total, receitasAnt.total);
+  const varDespesas = variacaoPct(despesas.total, despesasAnt.total);
+  const varSaldo = variacaoPct(saldo, round2(receitasAnt.total - despesasAnt.total));
+  const saldoAcumulado = saldoAcumuladoAteHoje(txs);
+  const cashFlowRows = buildCashFlowRows(txs, 6);
+
   const pendentes = txs.filter((t) => t.recorrente && getRecurrenceStatus(t) === 'pendente');
   // Vendas lançadas por vendedores esperando o admin revisar e aprovar.
   const aguardandoRevisao = role === 'admin' ? data.transactions.filter((t) => t.status === 'pendente') : [];
@@ -1699,19 +1706,19 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
   return (
     <div style={{ paddingTop: 12 }}>
       {aguardandoRevisao.length > 0 && (
-        <Card style={{ marginBottom: 14, borderColor: '#C89B3C', background: '#FBF3E1' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, color: '#8A6A1F' }}>
+        <Card style={{ marginBottom: 14, borderColor: 'var(--warning)', background: 'var(--warning-light)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, color: 'var(--warning-strong)' }}>
             <Clock size={16} /> {aguardandoRevisao.length} venda(s) aguardando sua revisão
           </div>
           <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
             {aguardandoRevisao.slice(0, 5).map((t) => {
               const vend = data.vendedores.find((v) => v.id === t.vendedorId);
               return (
-                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, color: '#6B5216', gap: 8 }}>
+                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, color: 'var(--warning-strong)', gap: 8 }}>
                   <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {vend?.nome || 'Vendedor'} · {t.clienteNome || 'sem cliente'} · {formatCurrency(t.valor)}
                   </span>
-                  <button onClick={() => onReviewSale(t)} style={{ background: 'none', border: 'none', color: 'var(--brand)', fontWeight: 700, fontSize: 11.5, cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
+                  <button onClick={() => onReviewSale(t)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 11.5, cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
                     Revisar
                   </button>
                 </div>
@@ -1723,35 +1730,59 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
 
       <PeriodSelector value={period} onChange={setPeriod} />
 
-      <Card style={{ marginTop: 14, background: '#13251F', color: '#fff', border: 'none' }}>
-        <div style={{ fontSize: 11.5, opacity: 0.7, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4 }}>Saldo do período</div>
-        <div className="lomuz-display" style={{ fontSize: 34, margin: '6px 0 14px', color: saldo >= 0 ? '#8FE3B8' : '#F3A6AC' }}>
-          {formatCurrency(saldo)}
-        </div>
-        <div style={{ display: 'flex', gap: 24 }}>
-          <div>
-            <div style={{ fontSize: 11, opacity: 0.65 }}>Receitas</div>
-            <div style={{ fontWeight: 700, fontSize: 15 }}>{formatCurrency(receitas.total)}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, opacity: 0.65 }}>Despesas</div>
-            <div style={{ fontWeight: 700, fontSize: 15 }}>{formatCurrency(despesas.total)}</div>
-          </div>
-        </div>
-      </Card>
+      <div className="lomuz-kpi-grid" style={{ marginTop: 14 }}>
+        <StatCard
+          title="Saldo acumulado"
+          value={formatCurrency(saldoAcumulado)}
+          icon={Wallet}
+          tone={saldoAcumulado >= 0 ? 'neutral' : 'danger'}
+          hint="Todas as receitas menos todas as despesas aprovadas, desde o início até hoje. Não é saldo de conta bancária — o app não tem conta bancária integrada."
+          footer="Desde o início até hoje"
+        />
+        <StatCard
+          title="Receitas do período"
+          value={formatCurrency(receitas.total)}
+          icon={ArrowUpCircle}
+          tone="success"
+          trendPct={varReceitas}
+          trendLabel="vs período anterior"
+          goodWhenUp
+          hint="Soma das receitas aprovadas dentro do período escolhido, incluindo as ocorrências de lançamentos recorrentes."
+        />
+        <StatCard
+          title="Despesas do período"
+          value={formatCurrency(despesas.total)}
+          icon={ArrowDownCircle}
+          tone="danger"
+          trendPct={varDespesas}
+          trendLabel="vs período anterior"
+          goodWhenUp={false}
+          hint="Soma das despesas aprovadas dentro do período escolhido, incluindo as ocorrências de lançamentos recorrentes."
+        />
+        <StatCard
+          title="Resultado do período"
+          value={formatCurrency(saldo)}
+          icon={TrendingUp}
+          tone="info"
+          trendPct={varSaldo}
+          trendLabel="vs período anterior"
+          goodWhenUp
+          hint="Receitas menos despesas do período. Vendas ainda pendentes de aprovação não entram nesta conta."
+        />
+      </div>
 
       {pendentes.length > 0 && (
-        <Card style={{ marginTop: 14, borderColor: '#C89B3C', background: '#FBF3E1' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, color: '#8A6A1F' }}>
+        <Card style={{ marginTop: 14, borderColor: 'var(--warning)', background: 'var(--warning-light)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, color: 'var(--warning-strong)' }}>
             <Clock size={16} /> {pendentes.length} lançamento(s) aguardando ativação
           </div>
           <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
             {pendentes.slice(0, 4).map((t) => {
               const c = data.categories.find((cc) => cc.id === t.categoriaId);
               return (
-                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, color: '#6B5216', gap: 8 }}>
+                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, color: 'var(--warning-strong)', gap: 8 }}>
                   <span>{c?.nome} · {formatCurrency(t.valor)} · ativa em {daysUntil(t.dataAtivacao)} dia(s)</span>
-                  <button onClick={() => onActivateNow(t)} style={{ background: 'none', border: 'none', color: 'var(--brand)', fontWeight: 700, fontSize: 11.5, cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
+                  <button onClick={() => onActivateNow(t)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 11.5, cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
                     Ativar agora
                   </button>
                 </div>
@@ -1760,6 +1791,78 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
           </div>
         </Card>
       )}
+
+      <div className="lomuz-main-grid">
+        <CashFlowChart rows={cashFlowRows} />
+
+        <Panel title="Próximos vencimentos">
+          {/* Este bloco NÃO mostra exemplo inventado: hoje um lançamento tem só
+              uma data, sem campo de vencimento, sem "pago/em aberto" e sem
+              fornecedor/cliente. Enquanto esses campos não existirem no banco,
+              o painel diz o que falta em vez de exibir número falso. */}
+          <NotAvailableBlock
+            title="Depende de campos que ainda não existem"
+            desc="Para listar vencimentos é preciso separar a data de vencimento da data do lançamento e marcar o que já foi pago ou recebido. Hoje cada lançamento tem apenas uma data. Me avise que eu incluo esses campos."
+          />
+        </Panel>
+      </div>
+
+      <Panel
+        title="Movimentações recentes"
+        style={{ marginTop: 16 }}
+        action={<PanelLink onClick={() => onGoTo('lancamentos')}>Ver todas</PanelLink>}
+      >
+          {recentTx.length === 0 ? (
+            <EmptyBlock
+              icon={Receipt}
+              title="Nenhuma movimentação"
+              desc="Os lançamentos deste período aparecem aqui em ordem de data."
+            />
+          ) : (
+            <div className="lomuz-table-wrap">
+              <table className="lomuz-table">
+                <caption className="lomuz-sr-only">
+                  Últimas movimentações do período, com data, descrição, categoria, tipo e valor.
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Data</th>
+                    <th scope="col">Descrição</th>
+                    <th scope="col">Categoria</th>
+                    <th scope="col">Tipo</th>
+                    <th scope="col" style={{ textAlign: 'right' }}>Valor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentTx.map((t) => {
+                    const c = data.categories.find((cc) => cc.id === t.categoriaId);
+                    const entrada = t.tipo === 'receita';
+                    return (
+                      <tr key={t.id}>
+                        <td className="lomuz-num" style={{ whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{formatDateBR(t.data)}</td>
+                        <td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {t.descricao || t.clienteNome || c?.nome || 'Sem descrição'}
+                        </td>
+                        <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{c?.nome || '—'}</td>
+                        <td>
+                          <StatusBadge tone={entrada ? 'success' : 'danger'} icon={entrada ? ArrowUpCircle : ArrowDownCircle}>
+                            {entrada ? 'Entrada' : 'Saída'}
+                          </StatusBadge>
+                        </td>
+                        <td
+                          className="lomuz-num"
+                          style={{ textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap', color: entrada ? 'var(--success)' : 'var(--danger)' }}
+                        >
+                          {entrada ? '' : '− '}{formatCurrency(t.valor)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+      </Panel>
 
       <MuralCard orientacoes={data.orientacoes} role={role} onEdit={onEditMural} />
 
@@ -1783,7 +1886,7 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
           {role === 'admin' && (
             <>
               <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '14px 0 -6px' }}>
-                <button onClick={onCustomizeClick} style={{ background: 'none', border: 'none', color: 'var(--brand)', fontWeight: 700, fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}>
+                <button onClick={onCustomizeClick} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}>
                   Personalizar gráficos
                 </button>
               </div>
@@ -1854,7 +1957,7 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
                     <Card style={{ padding: 0 }}>
                       {ranking.map((r, i) => (
                         <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: i === ranking.length - 1 ? 'none' : '1px solid var(--border)' }}>
-                          <div style={{ width: 26, height: 26, borderRadius: '50%', background: i === 0 ? 'var(--gold-soft)' : 'var(--surface-2)', color: i === 0 ? '#8A6A1F' : 'var(--ink-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 12, flexShrink: 0 }}>
+                          <div style={{ width: 26, height: 26, borderRadius: '50%', background: i === 0 ? 'var(--gold-soft)' : 'var(--surface-2)', color: i === 0 ? 'var(--warning-strong)' : 'var(--ink-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 12, flexShrink: 0 }}>
                             {i + 1}
                           </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
@@ -1921,7 +2024,7 @@ function LancamentosPage({ data, role, currentVendedorId, onEdit, onImportClick 
       {role === 'admin' && (
         <button
           onClick={onImportClick}
-          style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', color: 'var(--brand)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', padding: '0 0 10px' }}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', padding: '0 0 10px' }}
         >
           <Upload size={14} /> Importar CSV (Asaas ou outro)
         </button>
@@ -2248,7 +2351,7 @@ function EquipeForecast({ data, persist, askConfirm }) {
   return (
     <div>
       {inviteStatus && (
-        <div style={{ fontSize: 12.5, color: 'var(--brand)', fontWeight: 600, marginBottom: 10 }}>{inviteStatus}</div>
+        <div style={{ fontSize: 12.5, color: 'var(--primary-text)', fontWeight: 600, marginBottom: 10 }}>{inviteStatus}</div>
       )}
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
         <Button variant="secondary" onClick={() => { setEditing(null); setShowForm(true); }} style={{ fontSize: 13, padding: '8px 12px' }}>
@@ -2282,7 +2385,7 @@ function EquipeForecast({ data, persist, askConfirm }) {
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
                 <button
                   onClick={() => { setMetaTodosValor(''); setShowMetaTodos(true); }}
-                  style={{ background: 'none', border: 'none', color: 'var(--brand)', fontWeight: 700, fontSize: 12, cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
+                  style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 12, cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
                 >
                   Definir meta para todos
                 </button>
@@ -2297,7 +2400,7 @@ function EquipeForecast({ data, persist, askConfirm }) {
           ) : !selectedVendedor ? null : (
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8 }}>
-                <div style={{ fontSize: 12, color: selectedVendedor.profileId ? 'var(--positive)' : '#8A6A1F', fontWeight: 600 }}>
+                <div style={{ fontSize: 12, color: selectedVendedor.profileId ? 'var(--positive)' : 'var(--warning-strong)', fontWeight: 600 }}>
                   {selectedVendedor.profileId ? '✓ Conta vinculada' : `Aguardando cadastro (${selectedVendedor.conviteEmail})`}
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
@@ -2632,29 +2735,67 @@ function CategoriasPage({ data, persist, askConfirm }) {
    NAVEGAÇÃO
    ========================================================================= */
 
-function TopBar({ role, nome, onLogout, onManageUsers, onTheme, onMural, pageTitle }) {
+function ConfiguracoesPage({ role, themePref, onTheme, onUsers, onMural }) {
+  const temaLabel = { light: 'Claro', dark: 'Escuro', system: 'Automático' }[themePref] || 'Automático';
+
+  const itens = [
+    {
+      key: 'tema',
+      icon: Palette,
+      titulo: 'Aparência',
+      desc: `Tema claro, escuro ou automático. Atualmente: ${temaLabel}.`,
+      onClick: onTheme,
+      todos: true,
+    },
+    {
+      key: 'usuarios',
+      icon: Users,
+      titulo: 'Usuários',
+      desc: 'Definir quem é administrador e quem é vendedor.',
+      onClick: onUsers,
+      todos: false,
+    },
+    {
+      key: 'mural',
+      icon: Megaphone,
+      titulo: 'Mural de orientação',
+      desc: 'Recados e materiais em PDF para a equipe de vendas.',
+      onClick: onMural,
+      todos: false,
+    },
+  ].filter((i) => i.todos || role === 'admin');
+
   return (
-    <div style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg)', paddingTop: 18, paddingBottom: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '0 16px', gap: 10 }}>
-        <div style={{ minWidth: 0 }}>
-          <div className="lomuz-display" style={{ fontSize: 21, fontWeight: 600, color: 'var(--brand)' }}>Lomuz Control</div>
-          <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginTop: 2 }}>{pageTitle}</div>
-        </div>
-        <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nome}</div>
-          <div style={{ fontSize: 10.5, color: 'var(--ink-soft)', marginTop: 2 }}>{role === 'admin' ? 'Administrador' : 'Vendedor'}</div>
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 4 }}>
-            <button onClick={onTheme} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0 }}>Aparência</button>
-            {role === 'admin' && (
-              <button onClick={onMural} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0 }}>Mural</button>
-            )}
-            {role === 'admin' && (
-              <button onClick={onManageUsers} style={{ background: 'none', border: 'none', color: 'var(--brand)', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0 }}>Usuários</button>
-            )}
-            <button onClick={onLogout} style={{ background: 'none', border: 'none', color: 'var(--negative)', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0 }}>Sair</button>
-          </div>
-        </div>
-      </div>
+    <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
+      {itens.map((i) => {
+        const Icon = i.icon;
+        return (
+          <button
+            key={i.key}
+            onClick={i.onClick}
+            style={{
+              display: 'flex', alignItems: 'flex-start', gap: 12, textAlign: 'left',
+              background: 'var(--surface)', border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-lg)', padding: 18, cursor: 'pointer',
+              boxShadow: 'var(--shadow-sm)', color: 'var(--text-primary)',
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                width: 38, height: 38, borderRadius: 'var(--radius)', background: 'var(--primary-light)',
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}
+            >
+              <Icon size={19} style={{ color: 'var(--primary)' }} />
+            </span>
+            <span style={{ minWidth: 0 }}>
+              <span style={{ display: 'block', fontWeight: 700, fontSize: 14.5, marginBottom: 3 }}>{i.titulo}</span>
+              <span style={{ display: 'block', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{i.desc}</span>
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -2727,9 +2868,11 @@ function UsersManagementModal({ currentUserId, askConfirm }) {
 }
 
 function BottomNav({ page, setPage, onAdd, role }) {
-  const items = role === 'vendedor'
-    ? [{ key: 'inicio', label: 'Início', icon: Home }, { key: 'lancamentos', label: 'Vendas', icon: Receipt }, { key: 'previsao', label: 'Previsão', icon: TrendingUp }]
-    : [{ key: 'inicio', label: 'Início', icon: Home }, { key: 'lancamentos', label: 'Lançamentos', icon: Receipt }, { key: 'previsao', label: 'Previsão', icon: TrendingUp }, { key: 'categorias', label: 'Categorias', icon: Tag }];
+  // Mesma arquitetura de navegação do cabeçalho do desktop (mesmas seções, mesma
+  // ordem) — só a posição muda, para o usuário não se perder ao trocar de aparelho.
+  const items = navItemsFor(role).map((it) => (
+    it.key === 'inicio' ? { ...it, label: 'Início' } : it
+  ));
   const mid = Math.ceil(items.length / 2);
   const left = items.slice(0, mid);
   const right = items.slice(mid);
@@ -2738,7 +2881,7 @@ function BottomNav({ page, setPage, onAdd, role }) {
     const Icon = it.icon;
     const active = page === it.key;
     return (
-      <button key={it.key} onClick={() => setPage(it.key)} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, color: active ? 'var(--brand)' : 'var(--ink-soft)', padding: '4px 8px', flex: 1 }}>
+      <button key={it.key} onClick={() => setPage(it.key)} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, color: active ? 'var(--primary-text)' : 'var(--ink-soft)', padding: '4px 8px', flex: 1 }}>
         <Icon size={20} strokeWidth={active ? 2.4 : 2} />
         <span style={{ fontSize: 10.5, fontWeight: active ? 700 : 500 }}>{it.label}</span>
       </button>
@@ -2754,7 +2897,7 @@ function BottomNav({ page, setPage, onAdd, role }) {
         <button
           onClick={onAdd}
           aria-label="Novo lançamento"
-          style={{ position: 'absolute', top: -22, left: '50%', transform: 'translateX(-50%)', width: 56, height: 56, borderRadius: '50%', background: 'var(--brand)', color: '#fff', border: '4px solid var(--bg)', boxShadow: '0 8px 18px rgba(14,107,82,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+          style={{ position: 'absolute', top: -22, left: '50%', transform: 'translateX(-50%)', width: 56, height: 56, borderRadius: '50%', background: 'var(--brand)', color: '#fff', border: '4px solid var(--bg)', boxShadow: '0 8px 18px rgba(109,40,217,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
         >
           <Plus size={26} />
         </button>
@@ -2821,7 +2964,9 @@ function LoginScreen() {
     <div className="lomuz-app" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
       <style>{GLOBAL_CSS}</style>
       <div style={{ width: '100%', maxWidth: 360 }}>
-        <div className="lomuz-display" style={{ fontSize: 26, fontWeight: 600, color: 'var(--brand)', textAlign: 'center', marginBottom: 4 }}>Lomuz Control</div>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
+          <LogoHorizontal tone="light" size={40} />
+        </div>
         <p style={{ textAlign: 'center', color: 'var(--ink-soft)', fontSize: 13, marginBottom: 24 }}>
           {titulos[mode]}
         </p>
@@ -2863,7 +3008,7 @@ function LoginScreen() {
 
         <button
           onClick={() => trocarModo(mode === 'signup' ? 'login' : mode === 'reset' ? 'login' : 'signup')}
-          style={{ display: 'block', margin: '10px auto 0', background: 'none', border: 'none', color: 'var(--brand)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
+          style={{ display: 'block', margin: '10px auto 0', background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
         >
           {mode === 'signup' ? 'Já tem conta? Entrar' : mode === 'reset' ? 'Voltar para o login' : 'Não tem conta? Criar uma'}
         </button>
@@ -2893,7 +3038,9 @@ function ResetPasswordScreen({ onDone }) {
     <div className="lomuz-app" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
       <style>{GLOBAL_CSS}</style>
       <div style={{ width: '100%', maxWidth: 360 }}>
-        <div className="lomuz-display" style={{ fontSize: 26, fontWeight: 600, color: 'var(--brand)', textAlign: 'center', marginBottom: 4 }}>Lomuz Control</div>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
+          <LogoHorizontal tone="light" size={40} />
+        </div>
         <p style={{ textAlign: 'center', color: 'var(--ink-soft)', fontSize: 13, marginBottom: 24 }}>Defina sua nova senha</p>
         <Card>
           <Field label="Nova senha">
@@ -3256,42 +3403,109 @@ export default function App() {
     return <LoginScreen />;
   }
 
+  // Carregamento: esqueleto no lugar do painel, em vez de tela vazia com texto.
   if (!data) {
     return (
-      <div className={`lomuz-app${isDark ? ' lomuz-dark' : ''}`} style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div className={`lomuz-app${isDark ? ' lomuz-dark' : ''}`} style={{ minHeight: '100vh' }}>
         <style>{GLOBAL_CSS}</style>
-        <span style={{ fontSize: 14, color: 'var(--ink-soft)' }}>Carregando Lomuz Control…</span>
+        <div style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
+          <div className="lomuz-topbar">
+            <LogoHorizontal tone="light" size={32} />
+          </div>
+        </div>
+        <div className="lomuz-content" aria-busy="true" aria-live="polite">
+          <span className="lomuz-sr-only">Carregando os dados do Lomuz Control.</span>
+          <Skeleton width={200} height={26} />
+          <Skeleton width={300} height={14} style={{ marginTop: 8, marginBottom: 22 }} />
+          <div className="lomuz-kpi-grid">
+            <StatCardSkeleton /><StatCardSkeleton /><StatCardSkeleton /><StatCardSkeleton />
+          </div>
+          <div className="lomuz-main-grid">
+            <Skeleton height={320} radius="var(--radius-lg)" />
+            <Skeleton height={320} radius="var(--radius-lg)" />
+          </div>
+        </div>
       </div>
     );
   }
 
+  const primeiroNome = (nome || '').trim().split(/\s+/)[0] || '';
   const pageTitles = {
     inicio: 'Visão geral',
     lancamentos: role === 'vendedor' ? 'Suas vendas' : 'Lançamentos',
     previsao: role === 'vendedor' ? 'Sua previsão' : 'Previsão',
     categorias: 'Categorias',
+    config: 'Configurações',
+  };
+  const pageSubtitles = {
+    inicio: primeiroNome
+      ? `Olá, ${primeiroNome}. Aqui está o resumo financeiro.`
+      : 'Aqui está o resumo financeiro.',
+    lancamentos: role === 'vendedor'
+      ? 'Suas vendas lançadas e o status de aprovação de cada uma.'
+      : 'Todas as receitas e despesas, com filtro por tipo e categoria.',
+    previsao: role === 'vendedor'
+      ? 'Sua projeção de vendas, metas e comissão.'
+      : 'Projeção financeira e panorama da equipe de vendas.',
+    categorias: 'Categorias de receita e despesa, e os planos negociados.',
+    config: 'Aparência, usuários e mural de orientação.',
   };
 
+  // Avisos reais do sistema — nada decorativo no sino.
+  const alerts = [];
+  if (role === 'admin') {
+    const revisar = data.transactions.filter((t) => t.status === 'pendente').length;
+    if (revisar > 0) {
+      alerts.push({ tone: 'warning', page: 'inicio', text: `${revisar} venda(s) aguardando sua revisão.` });
+    }
+  }
+  const aguardandoAtivacao = scopedTransactions(data, role, currentVendedorId)
+    .filter((t) => t.recorrente && getRecurrenceStatus(t) === 'pendente').length;
+  if (aguardandoAtivacao > 0) {
+    alerts.push({ tone: 'warning', page: 'inicio', text: `${aguardandoAtivacao} lançamento(s) recorrente(s) aguardando ativação.` });
+  }
+
   return (
-    <div className={`lomuz-app${isDark ? ' lomuz-dark' : ''}`} style={{ minHeight: '100vh', display: 'flex', justifyContent: 'center' }}>
+    <div className={`lomuz-app${isDark ? ' lomuz-dark' : ''}`} style={{ minHeight: '100vh' }}>
       <style>{GLOBAL_CSS}</style>
-      <div className="lomuz-shell" style={{ width: '100%', minHeight: '100vh', position: 'relative', paddingBottom: 104 }}>
-        <TopBar role={role} nome={nome} onLogout={handleLogout} onManageUsers={() => setShowUsers(true)} onTheme={() => setShowTheme(true)} onMural={() => setShowMural(true)} pageTitle={pageTitles[page]} />
-        <main style={{ padding: '0 16px' }}>
-          {page === 'inicio' && (
-            <Dashboard data={data} role={role} currentVendedorId={currentVendedorId} period={period} setPeriod={setPeriod} onAddClick={openAddTransaction} onGoTo={setPage} onActivateNow={activateNow} onCustomizeClick={() => setShowCustomize(true)} onReviewSale={openEditTransaction} onEditMural={() => setShowMural(true)} />
-          )}
-          {page === 'lancamentos' && (
-            <LancamentosPage data={data} role={role} currentVendedorId={currentVendedorId} onEdit={openEditTransaction} onImportClick={() => setShowImportCsv(true)} />
-          )}
-          {page === 'previsao' && (
-            <PrevisaoPage data={data} role={role} currentVendedorId={currentVendedorId} persist={persist} askConfirm={askConfirm} />
-          )}
-          {page === 'categorias' && role !== 'vendedor' && (
-            <CategoriasPage data={data} persist={persist} askConfirm={askConfirm} />
-          )}
-        </main>
+      <AppShell
+        role={role}
+        nome={nome}
+        page={page}
+        setPage={setPage}
+        onLogout={handleLogout}
+        pageTitle={pageTitles[page] || 'Lomuz Control'}
+        pageSubtitle={pageSubtitles[page]}
+        alerts={alerts}
+        onAlertClick={(a) => setPage(a.page || 'inicio')}
+      >
+        {page === 'inicio' && (
+          <Dashboard data={data} role={role} currentVendedorId={currentVendedorId} period={period} setPeriod={setPeriod} onAddClick={openAddTransaction} onGoTo={setPage} onActivateNow={activateNow} onCustomizeClick={() => setShowCustomize(true)} onReviewSale={openEditTransaction} onEditMural={() => setShowMural(true)} />
+        )}
+        {page === 'lancamentos' && (
+          <LancamentosPage data={data} role={role} currentVendedorId={currentVendedorId} onEdit={openEditTransaction} onImportClick={() => setShowImportCsv(true)} />
+        )}
+        {page === 'previsao' && (
+          <PrevisaoPage data={data} role={role} currentVendedorId={currentVendedorId} persist={persist} askConfirm={askConfirm} />
+        )}
+        {page === 'categorias' && role !== 'vendedor' && (
+          <CategoriasPage data={data} persist={persist} askConfirm={askConfirm} />
+        )}
+        {page === 'config' && (
+          <ConfiguracoesPage
+            role={role}
+            themePref={themePref}
+            onTheme={() => setShowTheme(true)}
+            onUsers={() => setShowUsers(true)}
+            onMural={() => setShowMural(true)}
+          />
+        )}
+      </AppShell>
+
+      <div className="lomuz-bottomnav">
         <BottomNav page={page} setPage={setPage} onAdd={openAddTransaction} role={role} />
+      </div>
+      <div style={{ height: 96 }} className="lomuz-bottomnav" aria-hidden="true" />
 
         {showAddTx && (
           <Modal
@@ -3365,14 +3579,13 @@ export default function App() {
           </Modal>
         )}
 
-        {confirmDialog && (
-          <ConfirmDialog
-            message={confirmDialog.message}
-            onCancel={() => setConfirmDialog(null)}
-            onConfirm={() => { confirmDialog.onConfirm(); setConfirmDialog(null); }}
-          />
-        )}
-      </div>
+      {confirmDialog && (
+        <ConfirmDialog
+          message={confirmDialog.message}
+          onCancel={() => setConfirmDialog(null)}
+          onConfirm={() => { confirmDialog.onConfirm(); setConfirmDialog(null); }}
+        />
+      )}
     </div>
   );
 }
