@@ -105,6 +105,11 @@ function txToRow(tx, userId) {
     vendedor_id: tx.vendedorId || null,
     data_cancelamento: tx.dataCancelamento || null,
     created_by: userId,
+    status: tx.status || 'aprovado',
+    cliente_nome: tx.clienteNome || null,
+    contrato_meses: tx.contratoMeses || null,
+    forma_pagamento: tx.formaPagamento || null,
+    comissao_percentual: tx.comissaoPercentual != null ? tx.comissaoPercentual : null,
   };
 }
 function rowToTx(row) {
@@ -123,6 +128,11 @@ function rowToTx(row) {
     diasTeste: row.dias_teste,
     vendedorId: row.vendedor_id,
     dataCancelamento: row.data_cancelamento,
+    status: row.status || 'aprovado',
+    clienteNome: row.cliente_nome || '',
+    contratoMeses: row.contrato_meses,
+    formaPagamento: row.forma_pagamento || '',
+    comissaoPercentual: row.comissao_percentual != null ? Number(row.comissao_percentual) : null,
   };
 }
 function vendedorToRow(v) {
@@ -159,7 +169,11 @@ function getEffectiveStart(tx) {
 }
 
 // Retorna as datas de ocorrência de um lançamento dentro de [rangeStart, rangeEnd].
+// Vendas lançadas por vendedores só entram nos cálculos (saldo, metas, comissão,
+// gráficos) depois que o admin aprova — enquanto estão "pendente" ou "rejeitado"
+// elas aparecem na lista, mas não geram ocorrências financeiras.
 function expandOccurrences(tx, rangeStart, rangeEnd) {
+  if (tx.status && tx.status !== 'aprovado') return [];
   if (!tx.recorrente) {
     const d = parseISODate(tx.data);
     return (d >= rangeStart && d <= rangeEnd) ? [d] : [];
@@ -298,14 +312,21 @@ function buildVendedorRangeRows(transactions, vendedor, months, categoryIds) {
     const rs = startOfMonth(m);
     const re = endOfMonth(m);
     let vendas = 0;
+    let comissao = 0;
     transactions
       .filter((t) => t.vendedorId === vendedor.id && t.tipo === 'receita'
         && (!categoryIds || categoryIds.length === 0 || categoryIds.includes(t.categoriaId)))
-      .forEach((tx) => { vendas += tx.valor * expandOccurrences(tx, rs, re).length; });
+      .forEach((tx) => {
+        const valorNoMes = tx.valor * expandOccurrences(tx, rs, re).length;
+        vendas += valorNoMes;
+        // Cada venda pode ter uma comissão própria, definida pelo admin na revisão;
+        // sem isso, vale a comissão padrão do vendedor.
+        const pct = tx.comissaoPercentual != null ? tx.comissaoPercentual : (vendedor.comissaoPercentual || 0);
+        comissao += valorNoMes * (pct / 100);
+      });
     const key = monthKey(m);
     const meta = (vendedor.metas && vendedor.metas[key] != null) ? vendedor.metas[key] : (vendedor.metaPadrao || 0);
-    const comissao = round2(vendas * ((vendedor.comissaoPercentual || 0) / 100));
-    return { key, label: monthLabel(m), vendas: round2(vendas), meta: round2(meta), comissao };
+    return { key, label: monthLabel(m), vendas: round2(vendas), meta: round2(meta), comissao: round2(comissao) };
   });
 }
 
@@ -387,10 +408,16 @@ function buildVendedorRanking(transactions, vendedores, rangeStart, rangeEnd) {
   return vendedores
     .map((v) => {
       let vendas = 0;
+      let comissao = 0;
       transactions
         .filter((t) => t.tipo === 'receita' && t.vendedorId === v.id)
-        .forEach((tx) => { vendas += tx.valor * expandOccurrences(tx, rangeStart, rangeEnd).length; });
-      return { id: v.id, nome: v.nome, vendas: round2(vendas), comissao: round2(vendas * (v.comissaoPercentual / 100)) };
+        .forEach((tx) => {
+          const valor = tx.valor * expandOccurrences(tx, rangeStart, rangeEnd).length;
+          vendas += valor;
+          const pct = tx.comissaoPercentual != null ? tx.comissaoPercentual : (v.comissaoPercentual || 0);
+          comissao += valor * (pct / 100);
+        });
+      return { id: v.id, nome: v.nome, vendas: round2(vendas), comissao: round2(comissao) };
     })
     .sort((a, b) => b.vendas - a.vendas);
 }
@@ -407,6 +434,11 @@ function txToDraft(tx) {
     semTermino: tx.repeticoes == null,
     repeticoes: tx.repeticoes != null ? String(tx.repeticoes) : '',
     vendedorId: tx.vendedorId || '',
+    status: tx.status || 'aprovado',
+    clienteNome: tx.clienteNome || '',
+    contratoMeses: tx.contratoMeses != null ? String(tx.contratoMeses) : '',
+    formaPagamento: tx.formaPagamento || '',
+    comissaoPercentual: tx.comissaoPercentual != null ? String(tx.comissaoPercentual) : '',
   };
 }
 
@@ -680,6 +712,8 @@ function TransactionRow({ tx, category, last, onClick }) {
           {tx.recorrente && <Repeat size={11} />}
           {status === 'pendente' && <span style={{ color: '#8A6A1F', fontWeight: 700 }}>· Pendente</span>}
           {status === 'cancelado' && <span style={{ color: 'var(--negative)', fontWeight: 700 }}>· Cancelado</span>}
+          {tx.status === 'pendente' && <span style={{ color: '#8A6A1F', fontWeight: 700 }}>· Aguardando aprovação</span>}
+          {tx.status === 'rejeitado' && <span style={{ color: 'var(--negative)', fontWeight: 700 }}>· Rejeitada</span>}
         </div>
       </div>
       <div style={{ fontWeight: 700, fontSize: 14, color: tx.tipo === 'receita' ? 'var(--positive)' : 'var(--negative)', whiteSpace: 'nowrap' }}>
@@ -873,10 +907,13 @@ function VendedorPanoramaView({ vendedor, rows, isTeam, vendedoresCount, onEditM
    FORMULÁRIO DE LANÇAMENTO + FLUXO DE RECORRÊNCIA
    ========================================================================= */
 
-function TransactionForm({ draft, categories, role, vendedores, onSubmit, onCancel, onDelete, onCancelRecurrence }) {
+function TransactionForm({ draft, categories, role, vendedores, onSubmit, onCancel, onDelete, onCancelRecurrence, onApprove, onReject }) {
   const [local, setLocal] = useState(draft);
   const [error, setError] = useState('');
   const cats = categories.filter((c) => c.tipo === local.tipo);
+  // Campos de contrato só fazem sentido em venda (receita atribuída a vendedor).
+  const isVenda = local.tipo === 'receita';
+  const emRevisao = role === 'admin' && local.status === 'pendente';
 
   useEffect(() => {
     if (!cats.some((c) => c.id === local.categoriaId)) {
@@ -890,6 +927,7 @@ function TransactionForm({ draft, categories, role, vendedores, onSubmit, onCanc
   function submit() {
     if (!local.valor || parseFloat(local.valor) <= 0) { setError('Informe um valor válido.'); return; }
     if (!local.categoriaId) { setError('Escolha uma categoria.'); return; }
+    if (role === 'vendedor' && !local.clienteNome?.trim()) { setError('Informe o nome do cliente.'); return; }
     setError('');
     onSubmit(local);
   }
@@ -924,6 +962,33 @@ function TransactionForm({ draft, categories, role, vendedores, onSubmit, onCanc
         </select>
       </Field>
 
+      {isVenda && (
+        <>
+          <Field label={role === 'vendedor' ? 'Cliente' : 'Cliente (opcional)'}>
+            <input type="text" placeholder="Ex.: Padaria Central Ltda" value={local.clienteNome || ''} onChange={(e) => set('clienteNome', e.target.value)} style={inputStyle} />
+          </Field>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <Field label="Contrato (meses)">
+                <input type="number" min="0" placeholder="Ex.: 12" value={local.contratoMeses || ''} onChange={(e) => set('contratoMeses', e.target.value)} style={inputStyle} />
+              </Field>
+            </div>
+            <div style={{ flex: 1 }}>
+              <Field label="Pagamento">
+                <select value={local.formaPagamento || ''} onChange={(e) => set('formaPagamento', e.target.value)} style={inputStyle}>
+                  <option value="">Não informado</option>
+                  <option value="pix">Pix</option>
+                  <option value="boleto">Boleto</option>
+                  <option value="cartao">Cartão</option>
+                  <option value="transferencia">Transferência</option>
+                  <option value="dinheiro">Dinheiro</option>
+                </select>
+              </Field>
+            </div>
+          </div>
+        </>
+      )}
+
       <Field label="Descrição (opcional)">
         <input type="text" placeholder="Ex.: Supermercado do mês" value={local.descricao} onChange={(e) => set('descricao', e.target.value)} style={inputStyle} />
       </Field>
@@ -938,6 +1003,12 @@ function TransactionForm({ draft, categories, role, vendedores, onSubmit, onCanc
             <option value="">Nenhum</option>
             {vendedores.map((v) => <option key={v.id} value={v.id}>{v.nome}</option>)}
           </select>
+        </Field>
+      )}
+
+      {isVenda && role === 'admin' && local.vendedorId && (
+        <Field label="Comissão desta venda (%)" hint="Deixe em branco para usar a comissão padrão do vendedor.">
+          <input type="number" min="0" max="100" step="0.5" placeholder="Padrão do vendedor" value={local.comissaoPercentual ?? ''} onChange={(e) => set('comissaoPercentual', e.target.value)} style={inputStyle} />
         </Field>
       )}
 
@@ -970,10 +1041,32 @@ function TransactionForm({ draft, categories, role, vendedores, onSubmit, onCanc
 
       {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginTop: 12, fontWeight: 600 }}>{error}</div>}
 
-      <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
-        <Button variant="secondary" onClick={onCancel} style={{ flex: 1 }}>Cancelar</Button>
-        <Button variant="primary" onClick={submit} style={{ flex: 2 }}>{local.recorrente ? 'Continuar' : 'Salvar lançamento'}</Button>
-      </div>
+      {emRevisao ? (
+        <>
+          <Card style={{ marginTop: 16, borderColor: '#C89B3C', background: '#FBF3E1' }}>
+            <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.5, color: '#6B5216' }}>
+              Esta venda foi lançada por um vendedor e está aguardando sua revisão. Ajuste o que precisar acima e depois aprove — só assim ela passa a contar no saldo, nas metas e na comissão.
+            </p>
+          </Card>
+          <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+            <Button variant="secondary" onClick={() => onReject(local)} style={{ flex: 1 }}>Rejeitar</Button>
+            <Button variant="primary" onClick={() => onApprove(local)} style={{ flex: 2 }}>
+              <Check size={15} /> Aprovar venda
+            </Button>
+          </div>
+          <button
+            onClick={submit}
+            style={{ width: '100%', marginTop: 10, background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', padding: 8 }}
+          >
+            Salvar alterações sem aprovar
+          </button>
+        </>
+      ) : (
+        <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+          <Button variant="secondary" onClick={onCancel} style={{ flex: 1 }}>Cancelar</Button>
+          <Button variant="primary" onClick={submit} style={{ flex: 2 }}>{local.recorrente ? 'Continuar' : 'Salvar lançamento'}</Button>
+        </div>
+      )}
 
       {onDelete && (
         <button
@@ -1222,13 +1315,15 @@ function DashboardCustomizeModal({ widgets, onToggle, onClose }) {
   );
 }
 
-function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClick, onGoTo, onActivateNow, onCustomizeClick }) {
+function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClick, onGoTo, onActivateNow, onCustomizeClick, onReviewSale }) {
   const txs = scopedTransactions(data, role, currentVendedorId);
   const range = getPeriodRange(period);
   const despesas = sumByPeriod(txs, 'despesa', range.start, range.end);
   const receitas = sumByPeriod(txs, 'receita', range.start, range.end);
   const saldo = round2(receitas.total - despesas.total);
   const pendentes = txs.filter((t) => t.recorrente && getRecurrenceStatus(t) === 'pendente');
+  // Vendas lançadas por vendedores esperando o admin revisar e aprovar.
+  const aguardandoRevisao = role === 'admin' ? data.transactions.filter((t) => t.status === 'pendente') : [];
   const widgets = { ...DEFAULT_DASHBOARD_WIDGETS, ...(data.uiPrefs?.dashboardWidgets || {}) };
 
   const pieData = Object.entries(despesas.byCategory)
@@ -1258,6 +1353,29 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
 
   return (
     <div style={{ paddingTop: 12 }}>
+      {aguardandoRevisao.length > 0 && (
+        <Card style={{ marginBottom: 14, borderColor: '#C89B3C', background: '#FBF3E1' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, color: '#8A6A1F' }}>
+            <Clock size={16} /> {aguardandoRevisao.length} venda(s) aguardando sua revisão
+          </div>
+          <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {aguardandoRevisao.slice(0, 5).map((t) => {
+              const vend = data.vendedores.find((v) => v.id === t.vendedorId);
+              return (
+                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, color: '#6B5216', gap: 8 }}>
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {vend?.nome || 'Vendedor'} · {t.clienteNome || 'sem cliente'} · {formatCurrency(t.valor)}
+                  </span>
+                  <button onClick={() => onReviewSale(t)} style={{ background: 'none', border: 'none', color: 'var(--brand)', fontWeight: 700, fontSize: 11.5, cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
+                    Revisar
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
       <PeriodSelector value={period} onChange={setPeriod} />
 
       <Card style={{ marginTop: 14, background: '#13251F', color: '#fff', border: 'none' }}>
@@ -2392,6 +2510,13 @@ export default function App() {
       semTermino: true,
       repeticoes: '',
       vendedorId: role === 'vendedor' ? (currentVendedorId || '') : '',
+      // Venda lançada por vendedor entra como "pendente" e só conta depois
+      // que o admin revisa e aprova. Lançamento feito pelo admin já vale.
+      status: role === 'vendedor' ? 'pendente' : 'aprovado',
+      clienteNome: '',
+      contratoMeses: '',
+      formaPagamento: '',
+      comissaoPercentual: '',
     });
     setTxStep('form');
     setShowAddTx(true);
@@ -2442,9 +2567,26 @@ export default function App() {
       diasTeste: (draft.recorrente && activation.mode === 'agendada') ? (Number(activation.dias) || 0) : null,
       vendedorId: draft.vendedorId || null,
       dataCancelamento: editingTx?.dataCancelamento || null,
+      status: draft.status || editingTx?.status || 'aprovado',
+      clienteNome: draft.clienteNome || '',
+      contratoMeses: draft.contratoMeses ? (parseInt(draft.contratoMeses, 10) || null) : null,
+      formaPagamento: draft.formaPagamento || '',
+      comissaoPercentual: (draft.comissaoPercentual !== '' && draft.comissaoPercentual != null)
+        ? (parseFloat(draft.comissaoPercentual) || 0)
+        : null,
     };
     const list = editingTx ? data.transactions.map((t) => (t.id === tx.id ? tx : t)) : [...data.transactions, tx];
     persist({ ...data, transactions: list });
+  }
+  function approveTransaction(draft) {
+    commitTransaction({ ...draft, status: 'aprovado' }, { mode: draft.ativacao || 'imediata', dias: draft.diasTeste || 7 });
+    closeTxModal();
+  }
+  function rejectTransaction(draft) {
+    askConfirm('Rejeitar esta venda? Ela fica registrada como rejeitada e não conta no saldo nem na comissão.', () => {
+      commitTransaction({ ...draft, status: 'rejeitado' }, { mode: draft.ativacao || 'imediata', dias: draft.diasTeste || 7 });
+      closeTxModal();
+    });
   }
   function requestDeleteTransaction(tx) {
     askConfirm('Excluir este lançamento?', () => {
@@ -2523,7 +2665,7 @@ export default function App() {
         <TopBar role={role} nome={nome} onLogout={handleLogout} onManageUsers={() => setShowUsers(true)} onTheme={() => setShowTheme(true)} pageTitle={pageTitles[page]} />
         <main style={{ padding: '0 16px' }}>
           {page === 'inicio' && (
-            <Dashboard data={data} role={role} currentVendedorId={currentVendedorId} period={period} setPeriod={setPeriod} onAddClick={openAddTransaction} onGoTo={setPage} onActivateNow={activateNow} onCustomizeClick={() => setShowCustomize(true)} />
+            <Dashboard data={data} role={role} currentVendedorId={currentVendedorId} period={period} setPeriod={setPeriod} onAddClick={openAddTransaction} onGoTo={setPage} onActivateNow={activateNow} onCustomizeClick={() => setShowCustomize(true)} onReviewSale={openEditTransaction} />
           )}
           {page === 'lancamentos' && (
             <LancamentosPage data={data} role={role} currentVendedorId={currentVendedorId} onEdit={openEditTransaction} onImportClick={() => setShowImportCsv(true)} />
@@ -2539,7 +2681,12 @@ export default function App() {
 
         {showAddTx && (
           <Modal
-            title={editingTx ? 'Editar lançamento' : txStep === 'form' ? 'Novo lançamento' : txStep === 'confirmRecurrence' ? 'Confirmar recorrência' : 'Ativação da recorrência'}
+            title={
+              (editingTx && role === 'admin' && editingTx.status === 'pendente') ? 'Revisar venda'
+                : editingTx ? 'Editar lançamento'
+                  : txStep === 'form' ? (role === 'vendedor' ? 'Nova venda' : 'Novo lançamento')
+                    : txStep === 'confirmRecurrence' ? 'Confirmar recorrência' : 'Ativação da recorrência'
+            }
             onClose={closeTxModal}
           >
             {txStep === 'form' && (
@@ -2552,6 +2699,8 @@ export default function App() {
                 onCancel={closeTxModal}
                 onDelete={editingTx ? () => requestDeleteTransaction(editingTx) : null}
                 onCancelRecurrence={(editingTx && editingTx.recorrente && getRecurrenceStatus(editingTx) === 'ativo') ? () => requestCancelRecurrence(editingTx) : null}
+                onApprove={approveTransaction}
+                onReject={rejectTransaction}
               />
             )}
             {txStep === 'confirmRecurrence' && (

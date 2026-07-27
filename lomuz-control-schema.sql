@@ -56,6 +56,14 @@ create table transactions (
   vendedor_id text references vendedores(id) on delete set null,
   data_cancelamento date,
   created_by uuid references profiles(id),
+  -- Fluxo de revisão de vendas: o vendedor lança a venda com os dados do
+  -- contrato, mas ela só "vale" (conta em vendido/comissão/dashboard) depois
+  -- que o admin revisa, ajusta se precisar e aprova.
+  status text not null default 'aprovado' check (status in ('pendente', 'aprovado', 'rejeitado')),
+  cliente_nome text,
+  contrato_meses int,
+  forma_pagamento text,
+  comissao_percentual numeric,
   created_at timestamptz default now()
 );
 
@@ -125,21 +133,50 @@ create policy "Admin vê tudo, vendedor vê só o próprio" on transactions
     public.is_admin()
     or vendedor_id in (select id from vendedores where profile_id = auth.uid())
   );
-create policy "Admin insere qualquer, vendedor insere só o próprio" on transactions
+create policy "Admin insere qualquer, vendedor insere só o próprio pendente" on transactions
   for insert with check (
     public.is_admin()
-    or vendedor_id in (select id from vendedores where profile_id = auth.uid())
+    or (
+      vendedor_id in (select id from vendedores where profile_id = auth.uid())
+      and status = 'pendente'
+      and comissao_percentual is null
+    )
   );
-create policy "Admin edita tudo, vendedor edita só o próprio" on transactions
+create policy "Admin edita tudo, vendedor edita só o próprio pendente" on transactions
   for update using (
     public.is_admin()
-    or vendedor_id in (select id from vendedores where profile_id = auth.uid())
+    or (
+      vendedor_id in (select id from vendedores where profile_id = auth.uid())
+      and status = 'pendente'
+    )
   );
 create policy "Admin apaga tudo, vendedor apaga só o próprio" on transactions
   for delete using (
     public.is_admin()
     or vendedor_id in (select id from vendedores where profile_id = auth.uid())
   );
+
+-- Trava extra: mesmo numa edição permitida, só admin pode mudar o status da
+-- venda ou definir a comissão daquela venda especificamente (o vendedor pode
+-- editar os outros campos da própria venda pendente, mas não se auto-aprovar).
+create or replace function public.protect_transaction_review_fields()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_admin() then
+    new.status := old.status;
+    new.comissao_percentual := old.comissao_percentual;
+  end if;
+  return new;
+end;
+$$;
+
+create trigger trg_protect_transaction_review_fields
+  before update on transactions
+  for each row execute function public.protect_transaction_review_fields();
 
 -- ===================================================================
 -- DEPOIS DE RODAR O SCRIPT ACIMA:
