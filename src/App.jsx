@@ -2326,23 +2326,43 @@ function LancamentosPage({ data, role, currentVendedorId, onEdit, onImportClick 
         />
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-        <Chip active={filterTipo === 'todos'} onClick={() => setFilterTipo('todos')}>Todos</Chip>
-        <Chip active={filterTipo === 'receita'} onClick={() => setFilterTipo('receita')}>Receitas</Chip>
-        <Chip active={filterTipo === 'despesa'} onClick={() => setFilterTipo('despesa')}>Despesas</Chip>
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)', marginBottom: 6 }}>Tipo</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <Chip active={filterTipo === 'todos'} onClick={() => { setFilterTipo('todos'); setFilterCat('todas'); }}>Todos</Chip>
+          <Chip active={filterTipo === 'receita'} onClick={() => { setFilterTipo('receita'); setFilterCat('todas'); }}>Receitas</Chip>
+          <Chip active={filterTipo === 'despesa'} onClick={() => { setFilterTipo('despesa'); setFilterCat('todas'); }}>Despesas</Chip>
+        </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-        <Chip active={filterPeriodo === 'todos'} onClick={() => setFilterPeriodo('todos')}>Todo o período</Chip>
-        <Chip active={filterPeriodo === 'mes_atual'} onClick={() => setFilterPeriodo('mes_atual')}>Este mês</Chip>
-        <Chip active={filterPeriodo === 'ultimos_3'} onClick={() => setFilterPeriodo('ultimos_3')}>Últimos 3 meses</Chip>
-        <Chip active={filterPeriodo === 'ano_atual'} onClick={() => setFilterPeriodo('ano_atual')}>Este ano</Chip>
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)', marginBottom: 6 }}>Período</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <Chip active={filterPeriodo === 'todos'} onClick={() => setFilterPeriodo('todos')}>Todo o período</Chip>
+          <Chip active={filterPeriodo === 'mes_atual'} onClick={() => setFilterPeriodo('mes_atual')}>Este mês</Chip>
+          <Chip active={filterPeriodo === 'ultimos_3'} onClick={() => setFilterPeriodo('ultimos_3')}>Últimos 3 meses</Chip>
+          <Chip active={filterPeriodo === 'ano_atual'} onClick={() => setFilterPeriodo('ano_atual')}>Este ano</Chip>
+        </div>
       </div>
 
-      <select value={filterCat} onChange={(e) => setFilterCat(e.target.value)} style={{ ...inputStyle, marginBottom: 14 }}>
-        <option value="todas">Todas as categorias</option>
-        {data.categories.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
-      </select>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)', marginBottom: 6 }}>Categoria</div>
+        <select value={filterCat} onChange={(e) => setFilterCat(e.target.value)} style={inputStyle}>
+          <option value="todas">Todas as categorias{filterTipo !== 'todos' ? ` de ${filterTipo === 'receita' ? 'receita' : 'despesa'}` : ''}</option>
+          {filterTipo === 'todos' ? (
+            <>
+              <optgroup label="Receitas">
+                {data.categories.filter((c) => c.tipo === 'receita').map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+              </optgroup>
+              <optgroup label="Despesas">
+                {data.categories.filter((c) => c.tipo === 'despesa').map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+              </optgroup>
+            </>
+          ) : (
+            data.categories.filter((c) => c.tipo === filterTipo).map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)
+          )}
+        </select>
+      </div>
 
       {list.length === 0 ? (
         <EmptyState icon={Receipt} title="Nada por aqui ainda" desc="Toque no botão + para registrar sua primeira receita ou despesa, ou ajuste os filtros acima." />
