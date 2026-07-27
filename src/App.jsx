@@ -7,7 +7,7 @@ import {
   Home, Receipt, TrendingUp, Tag, Plus, X, Calendar, ChevronRight, Repeat, Check,
   ArrowUpCircle, ArrowDownCircle, Users, Trash2, Edit2, Clock, Target, Upload,
   Utensils, Car, Film, HeartPulse, ShoppingBag, Briefcase, GraduationCap, Wallet,
-  Gift, Smartphone, PawPrint, MoreHorizontal, Sparkles, Megaphone, Pin, FileText, Palette
+  Gift, Smartphone, PawPrint, MoreHorizontal, Sparkles, Megaphone, Pin, FileText, Palette, Award, Search,
 } from 'lucide-react';
 import Papa from 'papaparse';
 import { supabase } from './supabaseClient';
@@ -18,6 +18,7 @@ import {
   StatCard, TrendIndicator, StatusBadge, CashFlowChart, Panel, PanelLink,
   EmptyBlock, NotAvailableBlock, StatCardSkeleton, Skeleton, formatBRL,
 } from './components/dashboard.jsx';
+import { CurrencyInput } from './components/CurrencyInput.jsx';
 
 /* =========================================================================
    UTILITÁRIOS DE DATA E FORMATAÇÃO
@@ -300,6 +301,10 @@ function getPeriodRange(period) {
     }
     case 'ultimos_3':
       return { start: startOfMonth(addMonths(today, -2)), end: endOfMonth(today) };
+    case 'proximos_3':
+      return { start: startOfMonth(today), end: endOfMonth(addMonths(today, 2)) };
+    case 'proximos_6':
+      return { start: startOfMonth(today), end: endOfMonth(addMonths(today, 5)) };
     case 'ano_atual':
       return { start: new Date(today.getFullYear(), 0, 1), end: new Date(today.getFullYear(), 11, 31) };
     case 'custom':
@@ -328,6 +333,10 @@ function getPreviousPeriodRange(period) {
     }
     case 'ultimos_3':
       return { start: startOfMonth(addMonths(today, -5)), end: endOfMonth(addMonths(today, -3)) };
+    case 'proximos_3':
+      return { start: startOfMonth(addMonths(today, -3)), end: endOfMonth(addMonths(today, -1)) };
+    case 'proximos_6':
+      return { start: startOfMonth(addMonths(today, -6)), end: endOfMonth(addMonths(today, -1)) };
     case 'ano_atual':
       return { start: new Date(today.getFullYear() - 1, 0, 1), end: new Date(today.getFullYear() - 1, 11, 31) };
     case 'custom': {
@@ -362,10 +371,27 @@ function saldoAcumuladoAteHoje(transactions) {
 }
 
 // Entradas x saídas mês a mês, no formato que o gráfico de fluxo de caixa usa.
-function buildCashFlowRows(transactions, monthsBack) {
-  return buildCompanyEvolution(transactions, monthsBack).map((r) => ({
+// monthsForward > 0 estende a série para meses futuros (períodos "Próx. N meses").
+function buildCashFlowRows(transactions, monthsBack, monthsForward = 0) {
+  return buildCompanyEvolution(transactions, monthsBack, monthsForward).map((r) => ({
     key: r.key, label: r.label, entradas: r.receita, saidas: r.despesa,
   }));
+}
+
+// Saldo acumulado (desde 2000) mês a mês — usado quando o usuário clica no
+// cartão "Saldo acumulado" pra ver a evolução em vez do total fixo de hoje.
+function buildAccumulatedBalanceRows(transactions, monthsBack, monthsForward = 0) {
+  const today = new Date();
+  const inicio = new Date(2000, 0, 1);
+  const rows = [];
+  for (let i = -(monthsBack - 1); i <= monthsForward; i += 1) {
+    const m = addMonths(startOfMonth(today), i);
+    const re = endOfMonth(m);
+    const rec = sumByPeriod(transactions, 'receita', inicio, re).total;
+    const desp = sumByPeriod(transactions, 'despesa', inicio, re).total;
+    rows.push({ key: monthKey(m), label: monthLabel(m), saldo: round2(rec - desp) });
+  }
+  return rows;
 }
 
 function buildCategoryForecastRows(transactions, categoryIds, monthsCount) {
@@ -500,12 +526,14 @@ function buildMotivationalMessage(rows, nome) {
   };
 }
 
-// Evolução da empresa: receita x despesa mês a mês, últimos N meses (incluindo o atual).
-function buildCompanyEvolution(transactions, monthsBack) {
+// Evolução da empresa: receita x despesa mês a mês, últimos N meses (incluindo
+// o atual) e, opcionalmente, meses futuros (períodos "Próx. N meses" usam
+// lançamentos recorrentes/futuros já cadastrados via expandOccurrences).
+function buildCompanyEvolution(transactions, monthsBack, monthsForward = 0) {
   const today = new Date();
   const rows = [];
-  for (let i = monthsBack - 1; i >= 0; i -= 1) {
-    const m = addMonths(startOfMonth(today), -i);
+  for (let i = -(monthsBack - 1); i <= monthsForward; i += 1) {
+    const m = addMonths(startOfMonth(today), i);
     const rs = startOfMonth(m);
     const re = endOfMonth(m);
     const receita = sumByPeriod(transactions, 'receita', rs, re).total;
@@ -805,10 +833,13 @@ function CategoryRow({ cat, last, onEdit, onDelete }) {
    ========================================================================= */
 
 function PeriodSelector({ value, onChange }) {
+  // Ordem cronológica: passado à esquerda, este mês pré-selecionado no meio,
+  // futuro à direita — assim como pedido.
   const presets = [
-    { key: 'mes_atual', label: 'Este mês' },
-    { key: 'mes_passado', label: 'Mês passado' },
     { key: 'ultimos_3', label: 'Últimos 3 meses' },
+    { key: 'mes_atual', label: 'Este mês' },
+    { key: 'proximos_3', label: 'Próx. 3 meses' },
+    { key: 'proximos_6', label: 'Próx. 6 meses' },
     { key: 'ano_atual', label: 'Este ano' },
     { key: 'custom', label: 'Personalizado' },
   ];
@@ -895,6 +926,21 @@ function RangePeriodSelector({ mode, setMode, customFrom, setCustomFrom, customT
   );
 }
 
+// Campo de meta com máscara de reais que só avisa o pai (persist) ao sair do
+// campo — evita gravar a cada tecla digitada, igual ao <input onBlur> antigo.
+function MetaCurrencyField({ value, onCommit }) {
+  const [local, setLocal] = useState(value);
+  useEffect(() => { setLocal(value); }, [value]);
+  return (
+    <CurrencyInput
+      value={local}
+      onChange={setLocal}
+      onBlur={() => onCommit(local)}
+      style={{ ...inputStyle, padding: '3px 6px', fontSize: 11.5, width: 104 }}
+    />
+  );
+}
+
 // Cartão de resumo + mensagem motivacional + meta x realizado mês a mês,
 // usado tanto pra um vendedor individual quanto pra soma da equipe toda.
 function VendedorPanoramaView({ vendedor, rows, isTeam, vendedoresCount, onEditMeta }) {
@@ -952,7 +998,7 @@ function VendedorPanoramaView({ vendedor, rows, isTeam, vendedoresCount, onEditM
               <span>Vendido: {formatCurrency(r.vendas)}</span>
               {onEditMeta ? (
                 <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  Meta: <input key={`${r.key}-${r.meta}`} type="number" defaultValue={r.meta} onBlur={(e) => onEditMeta(r.key, e.target.value)} style={{ ...inputStyle, padding: '3px 6px', fontSize: 11.5, width: 80 }} />
+                  Meta: <MetaCurrencyField value={r.meta} onCommit={(v) => onEditMeta(r.key, v)} />
                 </span>
               ) : (
                 <span>Meta: {formatCurrency(r.meta)}</span>
@@ -1282,7 +1328,7 @@ function TransactionForm({ draft, categories, role, vendedores, planos, onSubmit
       )}
 
       <Field label="Valor">
-        <input type="number" min="0" step="0.01" placeholder="0,00" value={local.valor} onChange={(e) => set('valor', e.target.value)} style={inputStyle} />
+        <CurrencyInput value={local.valor} onChange={(v) => set('valor', v)} style={inputStyle} />
       </Field>
 
       <Field label="Categoria">
@@ -1586,7 +1632,7 @@ function VendedorForm({ vendedor, onSubmit, onCancel }) {
       )}
       <Field label="Comissão (%)"><input type="number" min="0" max="100" step="0.5" style={inputStyle} value={comissao} onChange={(e) => setComissao(e.target.value)} /></Field>
       <Field label="Meta mensal padrão" hint="Você pode ajustar mês a mês depois, na tela de Previsão.">
-        <input type="number" min="0" style={inputStyle} value={meta} onChange={(e) => setMeta(e.target.value)} />
+        <CurrencyInput value={meta} onChange={setMeta} style={inputStyle} />
       </Field>
       {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{error}</div>}
       <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
@@ -1657,6 +1703,13 @@ function DashboardCustomizeModal({ widgets, onToggle, onClose }) {
 }
 
 function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClick, onGoTo, onActivateNow, onCustomizeClick, onReviewSale, onEditMural }) {
+  // Qual cartão de indicador está "em foco" — controla o que aparece no
+  // gráfico de evolução logo abaixo (clique de novo no mesmo cartão desliga).
+  const [focusMetric, setFocusMetric] = useState(null);
+  function toggleFocus(key) {
+    setFocusMetric((cur) => (cur === key ? null : key));
+  }
+
   const txs = scopedTransactions(data, role, currentVendedorId);
   const range = getPeriodRange(period);
   const despesas = sumByPeriod(txs, 'despesa', range.start, range.end);
@@ -1671,7 +1724,27 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
   const varDespesas = variacaoPct(despesas.total, despesasAnt.total);
   const varSaldo = variacaoPct(saldo, round2(receitasAnt.total - despesasAnt.total));
   const saldoAcumulado = saldoAcumuladoAteHoje(txs);
-  const cashFlowRows = buildCashFlowRows(txs, 6);
+
+  // A janela do gráfico de evolução acompanha o período escolhido no topo,
+  // incluindo meses futuros quando o período escolhido é "Próx. N meses".
+  const chartWindow = {
+    ultimos_3: { back: 3, forward: 0 },
+    proximos_3: { back: 1, forward: 3 },
+    proximos_6: { back: 1, forward: 6 },
+    ano_atual: { back: 12, forward: 0 },
+  }[period.type] || { back: 6, forward: 0 };
+  const cashFlowRows = buildCashFlowRows(txs, chartWindow.back, chartWindow.forward);
+  const resultadoRows = buildCompanyEvolution(txs, chartWindow.back, chartWindow.forward);
+  const acumuladoRows = buildAccumulatedBalanceRows(txs, chartWindow.back, chartWindow.forward);
+
+  // Ranking de produtos/serviços mais vendidos no período (por categoria de receita).
+  const topProdutos = Object.entries(receitas.byCategory)
+    .map(([catId, val]) => {
+      const c = data.categories.find((cc) => cc.id === catId);
+      return { id: catId, nome: c?.nome || 'Outros', valor: val };
+    })
+    .sort((a, b) => b.valor - a.valor)
+    .slice(0, 5);
 
   const pendentes = txs.filter((t) => t.recorrente && getRecurrenceStatus(t) === 'pendente');
   // Vendas lançadas por vendedores esperando o admin revisar e aprovar.
@@ -1736,8 +1809,10 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
           value={formatCurrency(saldoAcumulado)}
           icon={Wallet}
           tone={saldoAcumulado >= 0 ? 'neutral' : 'danger'}
-          hint="Todas as receitas menos todas as despesas aprovadas, desde o início até hoje. Não é saldo de conta bancária — o app não tem conta bancária integrada."
-          footer="Desde o início até hoje"
+          hint="Todas as receitas menos todas as despesas aprovadas, desde o início até hoje. Não é saldo de conta bancária — o app não tem conta bancária integrada. Toque para ver a evolução mês a mês."
+          footer="Desde o início até hoje · toque para ver a evolução"
+          onClick={() => toggleFocus('saldo')}
+          active={focusMetric === 'saldo'}
         />
         <StatCard
           title="Receitas do período"
@@ -1747,7 +1822,9 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
           trendPct={varReceitas}
           trendLabel="vs período anterior"
           goodWhenUp
-          hint="Soma das receitas aprovadas dentro do período escolhido, incluindo as ocorrências de lançamentos recorrentes."
+          hint="Soma das receitas aprovadas dentro do período escolhido, incluindo as ocorrências de lançamentos recorrentes. Toque para ver a evolução mês a mês."
+          onClick={() => toggleFocus('receitas')}
+          active={focusMetric === 'receitas'}
         />
         <StatCard
           title="Despesas do período"
@@ -1757,7 +1834,9 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
           trendPct={varDespesas}
           trendLabel="vs período anterior"
           goodWhenUp={false}
-          hint="Soma das despesas aprovadas dentro do período escolhido, incluindo as ocorrências de lançamentos recorrentes."
+          hint="Soma das despesas aprovadas dentro do período escolhido, incluindo as ocorrências de lançamentos recorrentes. Toque para ver a evolução mês a mês."
+          onClick={() => toggleFocus('despesas')}
+          active={focusMetric === 'despesas'}
         />
         <StatCard
           title="Resultado do período"
@@ -1767,7 +1846,18 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
           trendPct={varSaldo}
           trendLabel="vs período anterior"
           goodWhenUp
-          hint="Receitas menos despesas do período. Vendas ainda pendentes de aprovação não entram nesta conta."
+          hint="Receitas menos despesas do período. Vendas ainda pendentes de aprovação não entram nesta conta. Toque para ver a evolução mês a mês."
+          onClick={() => toggleFocus('resultado')}
+          active={focusMetric === 'resultado'}
+        />
+        <StatCard
+          title="Produto mais vendido"
+          value={topProdutos[0]?.nome || '—'}
+          icon={Award}
+          tone="neutral"
+          footer={topProdutos[0] ? `${formatCurrency(topProdutos[0].valor)} no período · toque para ver o ranking` : 'Sem vendas categorizadas neste período'}
+          onClick={() => toggleFocus('produtos')}
+          active={focusMetric === 'produtos'}
         />
       </div>
 
@@ -1782,9 +1872,13 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
               return (
                 <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, color: 'var(--warning-strong)', gap: 8 }}>
                   <span>{c?.nome} · {formatCurrency(t.valor)} · ativa em {daysUntil(t.dataAtivacao)} dia(s)</span>
-                  <button onClick={() => onActivateNow(t)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 11.5, cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
-                    Ativar agora
-                  </button>
+                  {/* Só admin ativa antes do prazo — muitos produtos têm período de
+                      teste e o vendedor não deve poder pular essa validação. */}
+                  {role === 'admin' && (
+                    <button onClick={() => onActivateNow(t)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 11.5, cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
+                      Ativar agora
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -1793,7 +1887,40 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
       )}
 
       <div className="lomuz-main-grid">
-        <CashFlowChart rows={cashFlowRows} />
+        {focusMetric === 'produtos' ? (
+          <Panel title="Ranking de produtos mais vendidos">
+            {topProdutos.length === 0 ? (
+              <div style={{ padding: '10px 4px' }}>
+                <EmptyBlock icon={Tag} title="Nenhuma receita categorizada" desc="Quando houver vendas aprovadas com categoria neste período, o ranking aparece aqui." />
+              </div>
+            ) : (
+              <div style={{ padding: '6px 4px' }}>
+                {topProdutos.map((p, i) => (
+                  <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderBottom: i === topProdutos.length - 1 ? 'none' : '1px solid var(--border)' }}>
+                    <div style={{ width: 26, height: 26, borderRadius: '50%', background: i === 0 ? 'var(--warning-light)' : 'var(--surface-2)', color: i === 0 ? 'var(--warning-strong)' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 12, flexShrink: 0 }}>
+                      {i + 1}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.nome}</div>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--success)', whiteSpace: 'nowrap' }}>{formatCurrency(p.valor)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+        ) : (
+          <CashFlowChart
+            rows={focusMetric === 'saldo' ? acumuladoRows : focusMetric === 'resultado' ? resultadoRows : cashFlowRows}
+            mode={focusMetric === 'saldo' ? 'saldo' : focusMetric === 'resultado' ? 'resultado' : 'fluxo'}
+            emphasize={focusMetric === 'receitas' ? 'entradas' : focusMetric === 'despesas' ? 'saidas' : null}
+            title={
+              focusMetric === 'saldo' ? 'Evolução do saldo acumulado'
+                : focusMetric === 'resultado' ? 'Evolução do resultado mensal'
+                  : focusMetric === 'receitas' ? 'Fluxo de caixa — receitas em destaque'
+                    : focusMetric === 'despesas' ? 'Fluxo de caixa — despesas em destaque'
+                      : 'Fluxo de caixa'
+            }
+          />
+        )}
 
         <Panel title="Próximos vencimentos">
           {/* Este bloco NÃO mostra exemplo inventado: hoje um lançamento tem só
@@ -2013,11 +2140,46 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
 function LancamentosPage({ data, role, currentVendedorId, onEdit, onImportClick }) {
   const [filterTipo, setFilterTipo] = useState('todos');
   const [filterCat, setFilterCat] = useState('todas');
+  const [filterPeriodo, setFilterPeriodo] = useState('todos');
+  const [busca, setBusca] = useState('');
+  const [totalsMode, setTotalsMode] = useState('geral');
 
   let list = scopedTransactions(data, role, currentVendedorId);
   if (filterTipo !== 'todos') list = list.filter((t) => t.tipo === filterTipo);
   if (filterCat !== 'todas') list = list.filter((t) => t.categoriaId === filterCat);
+  if (filterPeriodo !== 'todos') {
+    const r = getPeriodRange({ type: filterPeriodo });
+    list = list.filter((t) => {
+      const d = parseISODate(t.data);
+      return d >= r.start && d <= r.end;
+    });
+  }
+  const termo = busca.trim().toLowerCase();
+  if (termo) {
+    list = list.filter((t) => {
+      const cat = data.categories.find((c) => c.id === t.categoriaId);
+      return (t.descricao || '').toLowerCase().includes(termo)
+        || (t.clienteNome || '').toLowerCase().includes(termo)
+        || (cat?.nome || '').toLowerCase().includes(termo);
+    });
+  }
   list = [...list].sort((a, b) => new Date(b.data) - new Date(a.data));
+
+  // Totais do filtro atual — sempre visíveis ao final da lista, no modo
+  // "geral" (soma tudo) ou "mensal" (agrupado por mês).
+  const totalReceitas = round2(list.filter((t) => t.tipo === 'receita').reduce((s, t) => s + t.valor, 0));
+  const totalDespesas = round2(list.filter((t) => t.tipo === 'despesa').reduce((s, t) => s + t.valor, 0));
+  const totalGeral = round2(totalReceitas - totalDespesas);
+
+  const porMes = {};
+  list.forEach((t) => {
+    const key = (t.data || '').slice(0, 7);
+    if (!porMes[key]) porMes[key] = { receitas: 0, despesas: 0 };
+    if (t.tipo === 'receita') porMes[key].receitas += t.valor; else porMes[key].despesas += t.valor;
+  });
+  const mensalRows = Object.entries(porMes)
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([key, v]) => ({ key, label: monthLabel(parseISODate(`${key}-01`)), receitas: round2(v.receitas), despesas: round2(v.despesas), saldo: round2(v.receitas - v.despesas) }));
 
   return (
     <div style={{ paddingTop: 12 }}>
@@ -2029,24 +2191,101 @@ function LancamentosPage({ data, role, currentVendedorId, onEdit, onImportClick 
           <Upload size={14} /> Importar CSV (Asaas ou outro)
         </button>
       )}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+
+      <div style={{ position: 'relative', marginBottom: 10 }}>
+        <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--ink-soft)', pointerEvents: 'none' }} />
+        <input
+          type="text"
+          value={busca}
+          onChange={(e) => setBusca(e.target.value)}
+          placeholder="Buscar por cliente, descrição ou categoria…"
+          style={{ ...inputStyle, paddingLeft: 34 }}
+        />
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
         <Chip active={filterTipo === 'todos'} onClick={() => setFilterTipo('todos')}>Todos</Chip>
         <Chip active={filterTipo === 'receita'} onClick={() => setFilterTipo('receita')}>Receitas</Chip>
         <Chip active={filterTipo === 'despesa'} onClick={() => setFilterTipo('despesa')}>Despesas</Chip>
       </div>
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+        <Chip active={filterPeriodo === 'todos'} onClick={() => setFilterPeriodo('todos')}>Todo o período</Chip>
+        <Chip active={filterPeriodo === 'mes_atual'} onClick={() => setFilterPeriodo('mes_atual')}>Este mês</Chip>
+        <Chip active={filterPeriodo === 'ultimos_3'} onClick={() => setFilterPeriodo('ultimos_3')}>Últimos 3 meses</Chip>
+        <Chip active={filterPeriodo === 'ano_atual'} onClick={() => setFilterPeriodo('ano_atual')}>Este ano</Chip>
+      </div>
+
       <select value={filterCat} onChange={(e) => setFilterCat(e.target.value)} style={{ ...inputStyle, marginBottom: 14 }}>
         <option value="todas">Todas as categorias</option>
         {data.categories.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
       </select>
 
       {list.length === 0 ? (
-        <EmptyState icon={Receipt} title="Nada por aqui ainda" desc="Toque no botão + para registrar sua primeira receita ou despesa." />
+        <EmptyState icon={Receipt} title="Nada por aqui ainda" desc="Toque no botão + para registrar sua primeira receita ou despesa, ou ajuste os filtros acima." />
       ) : (
-        <Card style={{ padding: 0 }}>
-          {list.map((tx, i) => (
-            <TransactionRow key={tx.id} tx={tx} category={data.categories.find((c) => c.id === tx.categoriaId)} last={i === list.length - 1} onClick={() => onEdit(tx)} />
-          ))}
-        </Card>
+        <>
+          <Card style={{ padding: 0 }}>
+            {list.map((tx, i) => (
+              <TransactionRow key={tx.id} tx={tx} category={data.categories.find((c) => c.id === tx.categoriaId)} last={i === list.length - 1} onClick={() => onEdit(tx)} />
+            ))}
+          </Card>
+
+          <div style={{ marginTop: 14, marginBottom: 24 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: 0.4 }}>Total do filtro</span>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <Chip active={totalsMode === 'geral'} onClick={() => setTotalsMode('geral')}>Total geral</Chip>
+                <Chip active={totalsMode === 'mensal'} onClick={() => setTotalsMode('mensal')}>Por mês</Chip>
+              </div>
+            </div>
+
+            {totalsMode === 'geral' ? (
+              <Card>
+                <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Receitas</div>
+                    <div style={{ fontWeight: 800, fontSize: 18, color: 'var(--positive)' }}>{formatCurrency(totalReceitas)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Despesas</div>
+                    <div style={{ fontWeight: 800, fontSize: 18, color: 'var(--negative)' }}>{formatCurrency(totalDespesas)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Resultado</div>
+                    <div style={{ fontWeight: 800, fontSize: 18, color: totalGeral >= 0 ? 'var(--primary-text)' : 'var(--negative)' }}>{formatCurrency(totalGeral)}</div>
+                  </div>
+                </div>
+              </Card>
+            ) : (
+              <Card style={{ padding: 0 }}>
+                <div className="lomuz-table-wrap">
+                  <table className="lomuz-table">
+                    <caption className="lomuz-sr-only">Totais mensais do filtro aplicado.</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Mês</th>
+                        <th scope="col" style={{ textAlign: 'right' }}>Receitas</th>
+                        <th scope="col" style={{ textAlign: 'right' }}>Despesas</th>
+                        <th scope="col" style={{ textAlign: 'right' }}>Saldo</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {mensalRows.map((r) => (
+                        <tr key={r.key}>
+                          <td style={{ whiteSpace: 'nowrap' }}>{r.label}</td>
+                          <td className="lomuz-num" style={{ textAlign: 'right', color: 'var(--positive)' }}>{formatCurrency(r.receitas)}</td>
+                          <td className="lomuz-num" style={{ textAlign: 'right', color: 'var(--negative)' }}>{formatCurrency(r.despesas)}</td>
+                          <td className="lomuz-num" style={{ textAlign: 'right', fontWeight: 700 }}>{formatCurrency(r.saldo)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
@@ -2432,7 +2671,7 @@ function EquipeForecast({ data, persist, askConfirm }) {
             Depois você ainda pode ajustar cada pessoa individualmente.
           </p>
           <Field label="Meta mensal por vendedor">
-            <input type="number" min="0" style={inputStyle} value={metaTodosValor} onChange={(e) => setMetaTodosValor(e.target.value)} placeholder="Ex.: 15000" />
+            <CurrencyInput value={metaTodosValor} onChange={setMetaTodosValor} style={inputStyle} />
           </Field>
           <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
             <Button variant="secondary" onClick={() => setShowMetaTodos(false)} style={{ flex: 1 }}>Cancelar</Button>
@@ -2553,7 +2792,7 @@ function PlanoForm({ plano, categories, onSubmit, onCancel }) {
       <Field label="Nome do plano"><input type="text" style={inputStyle} value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex.: Plano Rádio Premium" /></Field>
       <div style={{ display: 'flex', gap: 10 }}>
         <div style={{ flex: 1 }}>
-          <Field label="Valor"><input type="number" min="0" step="0.01" style={inputStyle} value={valor} onChange={(e) => setValor(e.target.value)} placeholder="0,00" /></Field>
+          <Field label="Valor"><CurrencyInput value={valor} onChange={setValor} style={inputStyle} /></Field>
         </div>
         <div style={{ flex: 1 }}>
           <Field label="Comissão (%)"><input type="number" min="0" max="100" step="0.5" style={inputStyle} value={comissao} onChange={(e) => setComissao(e.target.value)} /></Field>
@@ -3418,7 +3657,7 @@ export default function App() {
           <Skeleton width={200} height={26} />
           <Skeleton width={300} height={14} style={{ marginTop: 8, marginBottom: 22 }} />
           <div className="lomuz-kpi-grid">
-            <StatCardSkeleton /><StatCardSkeleton /><StatCardSkeleton /><StatCardSkeleton />
+            <StatCardSkeleton /><StatCardSkeleton /><StatCardSkeleton /><StatCardSkeleton /><StatCardSkeleton />
           </div>
           <div className="lomuz-main-grid">
             <Skeleton height={320} radius="var(--radius-lg)" />

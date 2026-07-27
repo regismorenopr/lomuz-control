@@ -166,7 +166,7 @@ export function NotAvailableBlock({ title, desc }) {
 /* ---------- cartão de indicador ---------- */
 export function StatCard({
   title, value, icon: Icon, tone = 'neutral',
-  trendPct, trendLabel, goodWhenUp = true, hint, footer, loading,
+  trendPct, trendLabel, goodWhenUp = true, hint, footer, loading, onClick, active,
 }) {
   if (loading) return <StatCardSkeleton />;
 
@@ -175,13 +175,22 @@ export function StatCard({
     : tone === 'danger' ? 'var(--danger)'
       : tone === 'info' ? 'var(--primary-text)'
         : 'var(--text-primary)';
+  const clickable = !!onClick;
 
   return (
     <div
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
+      aria-pressed={clickable ? !!active : undefined}
       style={{
-        background: 'var(--surface)', border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-lg)', padding: 18, boxShadow: 'var(--shadow-sm)',
+        background: 'var(--surface)',
+        border: active ? '1px solid var(--primary)' : '1px solid var(--border)',
+        borderRadius: 'var(--radius-lg)', padding: 18,
+        boxShadow: active ? '0 0 0 3px var(--primary-light)' : 'var(--shadow-sm)',
         display: 'flex', flexDirection: 'column', minWidth: 0,
+        cursor: clickable ? 'pointer' : 'default',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
@@ -256,14 +265,21 @@ function LegendDot({ color, children }) {
 }
 
 /**
- * Fluxo de caixa: entradas (roxo da marca) x saídas (azul).
- * `rows` = [{ label, entradas, saidas }]
- * Inclui resumo em texto para leitor de tela, já que gráfico sozinho não é lido.
+ * Fluxo de caixa: entradas (roxo da marca) x saídas (azul), ou uma única
+ * série em destaque (`mode="saldo"` / `mode="resultado"`) quando o usuário
+ * clica num cartão de indicador específico.
+ * `rows` = [{ label, entradas, saidas }] no modo padrão, ou [{ label, saldo }]
+ * nos modos de série única. Inclui resumo em texto para leitor de tela.
  */
-export function CashFlowChart({ rows, loading, periodSelector }) {
-  const temDado = rows?.some((r) => r.entradas > 0 || r.saidas > 0);
+export function CashFlowChart({ rows, loading, periodSelector, title = 'Fluxo de caixa', mode = 'fluxo', emphasize }) {
+  const single = mode !== 'fluxo';
+  const singleLabel = mode === 'saldo' ? 'Saldo acumulado' : 'Resultado mensal';
+  const temDado = single
+    ? rows?.some((r) => r.saldo !== 0)
+    : rows?.some((r) => r.entradas > 0 || r.saidas > 0);
   const totalEnt = (rows || []).reduce((s, r) => s + (r.entradas || 0), 0);
   const totalSai = (rows || []).reduce((s, r) => s + (r.saidas || 0), 0);
+  const ultimoSaldo = (rows && rows.length) ? rows[rows.length - 1].saldo : 0;
 
   return (
     <section
@@ -274,10 +290,16 @@ export function CashFlowChart({ rows, loading, periodSelector }) {
       aria-labelledby="titulo-fluxo-caixa"
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-        <h2 id="titulo-fluxo-caixa" style={{ margin: 0, fontSize: 15.5, fontWeight: 700 }}>Fluxo de caixa</h2>
+        <h2 id="titulo-fluxo-caixa" style={{ margin: 0, fontSize: 15.5, fontWeight: 700 }}>{title}</h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-          <LegendDot color="var(--chart-in)">Entradas</LegendDot>
-          <LegendDot color="var(--chart-out)">Saídas</LegendDot>
+          {single ? (
+            <LegendDot color="var(--primary)">{singleLabel}</LegendDot>
+          ) : (
+            <>
+              <LegendDot color="var(--chart-in)">Entradas</LegendDot>
+              <LegendDot color="var(--chart-out)">Saídas</LegendDot>
+            </>
+          )}
           {periodSelector}
         </div>
       </div>
@@ -293,10 +315,9 @@ export function CashFlowChart({ rows, loading, periodSelector }) {
         <>
           {/* Resumo textual: um gráfico não é lido por leitor de tela. */}
           <p className="lomuz-sr-only">
-            Gráfico de linhas comparando entradas e saídas mês a mês.
-            Total de entradas no período: {formatBRL(totalEnt)}.
-            Total de saídas: {formatBRL(totalSai)}.
-            Resultado: {formatBRL(totalEnt - totalSai)}.
+            {single
+              ? `Gráfico de ${singleLabel.toLowerCase()} mês a mês. Valor mais recente: ${formatBRL(ultimoSaldo)}.`
+              : `Gráfico de linhas comparando entradas e saídas mês a mês. Total de entradas no período: ${formatBRL(totalEnt)}. Total de saídas: ${formatBRL(totalSai)}. Resultado: ${formatBRL(totalEnt - totalSai)}.`}
           </p>
           <div style={{ width: '100%', height: 260 }}>
             <ResponsiveContainer width="100%" height="100%">
@@ -315,15 +336,27 @@ export function CashFlowChart({ rows, loading, periodSelector }) {
                   tickFormatter={formatCompactBRL}
                 />
                 <Tooltip content={<ChartTooltip />} />
-                <Line
-                  type="monotone" dataKey="entradas" name="Entradas" stroke="var(--chart-in)" strokeWidth={2.4}
-                  dot={{ r: 3.5, strokeWidth: 2, fill: 'var(--surface)' }} activeDot={{ r: 5 }}
-                  fill="url(#lomuzFillEnt)"
-                />
-                <Line
-                  type="monotone" dataKey="saidas" name="Saídas" stroke="var(--chart-out)" strokeWidth={2.4}
-                  dot={{ r: 3.5, strokeWidth: 2, fill: 'var(--surface)' }} activeDot={{ r: 5 }}
-                />
+                {single ? (
+                  <Line
+                    type="monotone" dataKey="saldo" name={singleLabel} stroke="var(--primary)" strokeWidth={2.4}
+                    dot={{ r: 3.5, strokeWidth: 2, fill: 'var(--surface)' }} activeDot={{ r: 5 }}
+                    fill="url(#lomuzFillEnt)"
+                  />
+                ) : (
+                  <>
+                    <Line
+                      type="monotone" dataKey="entradas" name="Entradas" stroke="var(--chart-in)" strokeWidth={2.4}
+                      strokeOpacity={emphasize && emphasize !== 'entradas' ? 0.3 : 1}
+                      dot={{ r: 3.5, strokeWidth: 2, fill: 'var(--surface)' }} activeDot={{ r: 5 }}
+                      fill="url(#lomuzFillEnt)"
+                    />
+                    <Line
+                      type="monotone" dataKey="saidas" name="Saídas" stroke="var(--chart-out)" strokeWidth={2.4}
+                      strokeOpacity={emphasize && emphasize !== 'saidas' ? 0.3 : 1}
+                      dot={{ r: 3.5, strokeWidth: 2, fill: 'var(--surface)' }} activeDot={{ r: 5 }}
+                    />
+                  </>
+                )}
               </LineChart>
             </ResponsiveContainer>
           </div>
