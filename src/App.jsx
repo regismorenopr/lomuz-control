@@ -1777,7 +1777,7 @@ function CategoriasPage({ data, persist, askConfirm }) {
    NAVEGAÇÃO
    ========================================================================= */
 
-function TopBar({ role, nome, onLogout, pageTitle }) {
+function TopBar({ role, nome, onLogout, onManageUsers, pageTitle }) {
   return (
     <div style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg)', paddingTop: 18, paddingBottom: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '0 16px', gap: 10 }}>
@@ -1788,9 +1788,66 @@ function TopBar({ role, nome, onLogout, pageTitle }) {
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 700, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nome}</div>
           <div style={{ fontSize: 10.5, color: 'var(--ink-soft)', marginTop: 2 }}>{role === 'admin' ? 'Administrador' : 'Vendedor'}</div>
-          <button onClick={onLogout} style={{ background: 'none', border: 'none', color: 'var(--negative)', fontSize: 11, fontWeight: 700, cursor: 'pointer', marginTop: 4, padding: 0 }}>Sair</button>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 4 }}>
+            {role === 'admin' && (
+              <button onClick={onManageUsers} style={{ background: 'none', border: 'none', color: 'var(--brand)', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0 }}>Usuários</button>
+            )}
+            <button onClick={onLogout} style={{ background: 'none', border: 'none', color: 'var(--negative)', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0 }}>Sair</button>
+          </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function UsersManagementModal({ currentUserId, askConfirm }) {
+  const [users, setUsers] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    supabase.from('profiles').select('id, nome, role, created_at').order('created_at').then(({ data, error: err }) => {
+      if (err) setError('Não foi possível carregar os usuários.');
+      else setUsers(data);
+    });
+  }, []);
+
+  function changeRole(user, newRole) {
+    if (user.role === newRole || user.id === currentUserId) return;
+    askConfirm(
+      `Tornar ${user.nome || 'este usuário'} ${newRole === 'admin' ? 'administrador' : 'vendedor'}?`,
+      async () => {
+        const { error: err } = await supabase.from('profiles').update({ role: newRole }).eq('id', user.id);
+        if (!err) setUsers((list) => list.map((u) => (u.id === user.id ? { ...u, role: newRole } : u)));
+      }
+    );
+  }
+
+  if (users === null) {
+    return <p style={{ fontSize: 13, color: 'var(--ink-soft)' }}>{error || 'Carregando…'}</p>;
+  }
+
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 14, lineHeight: 1.5 }}>
+        Só aparece aqui quem já criou a própria conta pelo site. Você não pode mudar seu próprio papel por aqui.
+      </p>
+      <Card style={{ padding: 0 }}>
+        {users.length === 0 && <div style={{ padding: 16, fontSize: 13, color: 'var(--ink-soft)' }}>Nenhum usuário encontrado.</div>}
+        {users.map((u, i) => {
+          const isSelf = u.id === currentUserId;
+          return (
+            <div key={u.id} style={{ padding: 14, borderBottom: i === users.length - 1 ? 'none' : '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 700, fontSize: 14 }}>
+                {u.nome || 'Sem nome'}{isSelf && <span style={{ color: 'var(--ink-soft)', fontWeight: 500 }}> (você)</span>}
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexShrink: 0, opacity: isSelf ? 0.45 : 1, pointerEvents: isSelf ? 'none' : 'auto' }}>
+                <Chip active={u.role === 'vendedor'} onClick={() => changeRole(u, 'vendedor')}>Vendedor</Chip>
+                <Chip active={u.role === 'admin'} onClick={() => changeRole(u, 'admin')}>Admin</Chip>
+              </div>
+            </div>
+          );
+        })}
+      </Card>
     </div>
   );
 }
@@ -1914,6 +1971,7 @@ export default function App() {
   const [showAddTx, setShowAddTx] = useState(false);
   const [showImportCsv, setShowImportCsv] = useState(false);
   const [showCustomize, setShowCustomize] = useState(false);
+  const [showUsers, setShowUsers] = useState(false);
   const [editingTx, setEditingTx] = useState(null);
   const [txDraft, setTxDraft] = useState(null);
   const [txStep, setTxStep] = useState('form');
@@ -2170,7 +2228,7 @@ export default function App() {
     <div className="lomuz-app" style={{ minHeight: '100vh', display: 'flex', justifyContent: 'center' }}>
       <style>{GLOBAL_CSS}</style>
       <div className="lomuz-shell" style={{ width: '100%', minHeight: '100vh', position: 'relative', paddingBottom: 104 }}>
-        <TopBar role={role} nome={nome} onLogout={handleLogout} pageTitle={pageTitles[page]} />
+        <TopBar role={role} nome={nome} onLogout={handleLogout} onManageUsers={() => setShowUsers(true)} pageTitle={pageTitles[page]} />
         <main style={{ padding: '0 16px' }}>
           {page === 'inicio' && (
             <Dashboard data={data} role={role} currentVendedorId={currentVendedorId} period={period} setPeriod={setPeriod} onAddClick={openAddTransaction} onGoTo={setPage} onActivateNow={activateNow} onCustomizeClick={() => setShowCustomize(true)} />
@@ -2226,6 +2284,12 @@ export default function App() {
               onToggle={handleToggleWidget}
               onClose={() => setShowCustomize(false)}
             />
+          </Modal>
+        )}
+
+        {showUsers && (
+          <Modal title="Usuários" onClose={() => setShowUsers(false)}>
+            <UsersManagementModal currentUserId={session?.user?.id} askConfirm={askConfirm} />
           </Modal>
         )}
 

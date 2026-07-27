@@ -91,6 +91,10 @@ create policy "Ver o próprio perfil, ou tudo se for admin" on profiles
   );
 create policy "Atualizar o próprio perfil" on profiles
   for update using (id = auth.uid());
+create policy "Admin atualiza qualquer perfil" on profiles
+  for update using (
+    exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'admin')
+  );
 
 create policy "Admin gerencia vendedores, vendedor vê o próprio" on vendedores
   for all using (
