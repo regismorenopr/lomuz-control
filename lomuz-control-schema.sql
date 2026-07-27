@@ -39,6 +39,22 @@ create table categories (
   created_at timestamptz default now()
 );
 
+-- Planos negociados: cada plano tem preço e comissão pré-definidos pelo admin.
+-- O vendedor escolhe o plano ao lançar a venda e os campos vêm preenchidos;
+-- o admin pode alterar tudo antes de aprovar.
+create table planos (
+  id text primary key,
+  nome text not null,
+  valor numeric not null default 0,
+  categoria_id text references categories(id) on delete set null,
+  comissao_percentual numeric not null default 0,
+  contrato_meses int,
+  recorrente boolean not null default false,
+  frequencia text,
+  ativo boolean not null default true,
+  created_at timestamptz default now()
+);
+
 -- Lançamentos (receitas e despesas)
 create table transactions (
   id text primary key,
@@ -63,6 +79,10 @@ create table transactions (
   cliente_nome text,
   contrato_meses int,
   forma_pagamento text,
+  -- Plano negociado escolhido pelo vendedor. A comissão efetiva da venda é
+  -- comissao_percentual (ajuste do admin) > comissão do plano > comissão padrão
+  -- do vendedor. O vendedor não pode escrever comissao_percentual (ver trigger).
+  plano_id text references planos(id) on delete set null,
   comissao_percentual numeric,
   created_at timestamptz default now()
 );
@@ -91,6 +111,7 @@ create trigger on_auth_user_created
 alter table profiles enable row level security;
 alter table vendedores enable row level security;
 alter table categories enable row level security;
+alter table planos enable row level security;
 alter table transactions enable row level security;
 
 -- Função auxiliar pra checar "é admin?" sem causar recursão de RLS.
@@ -126,6 +147,15 @@ create policy "Só admin cria categorias" on categories
 create policy "Só admin edita categorias" on categories
   for update using (public.is_admin());
 create policy "Só admin apaga categorias" on categories
+  for delete using (public.is_admin());
+
+create policy "Todo mundo logado vê planos" on planos
+  for select using (auth.uid() is not null);
+create policy "Só admin cria planos" on planos
+  for insert with check (public.is_admin());
+create policy "Só admin edita planos" on planos
+  for update using (public.is_admin());
+create policy "Só admin apaga planos" on planos
   for delete using (public.is_admin());
 
 create policy "Admin vê tudo, vendedor vê só o próprio" on transactions

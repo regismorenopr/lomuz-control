@@ -109,6 +109,7 @@ function txToRow(tx, userId) {
     cliente_nome: tx.clienteNome || null,
     contrato_meses: tx.contratoMeses || null,
     forma_pagamento: tx.formaPagamento || null,
+    plano_id: tx.planoId || null,
     comissao_percentual: tx.comissaoPercentual != null ? tx.comissaoPercentual : null,
   };
 }
@@ -132,8 +133,44 @@ function rowToTx(row) {
     clienteNome: row.cliente_nome || '',
     contratoMeses: row.contrato_meses,
     formaPagamento: row.forma_pagamento || '',
+    planoId: row.plano_id || null,
     comissaoPercentual: row.comissao_percentual != null ? Number(row.comissao_percentual) : null,
   };
+}
+function planoToRow(p) {
+  return {
+    id: p.id,
+    nome: p.nome,
+    valor: p.valor || 0,
+    categoria_id: p.categoriaId || null,
+    comissao_percentual: p.comissaoPercentual || 0,
+    contrato_meses: p.contratoMeses || null,
+    recorrente: !!p.recorrente,
+    frequencia: p.frequencia || null,
+    ativo: p.ativo !== false,
+  };
+}
+function rowToPlano(row) {
+  return {
+    id: row.id,
+    nome: row.nome,
+    valor: Number(row.valor) || 0,
+    categoriaId: row.categoria_id,
+    comissaoPercentual: Number(row.comissao_percentual) || 0,
+    contratoMeses: row.contrato_meses,
+    recorrente: !!row.recorrente,
+    frequencia: row.frequencia || 'mensal',
+    ativo: row.ativo !== false,
+  };
+}
+
+// Comissão que vale para uma venda: ajuste do admin > comissão do plano
+// negociado > comissão padrão do vendedor.
+function comissaoDaVenda(tx, vendedor, planos) {
+  if (tx.comissaoPercentual != null) return tx.comissaoPercentual;
+  const plano = tx.planoId ? (planos || []).find((p) => p.id === tx.planoId) : null;
+  if (plano) return plano.comissaoPercentual || 0;
+  return vendedor?.comissaoPercentual || 0;
 }
 function vendedorToRow(v) {
   return {
@@ -307,7 +344,7 @@ function computeMonthsForRange(mode, customFrom, customTo) {
 
 // Vendido/meta/comissão de um vendedor mês a mês, numa lista arbitrária de meses
 // (passados, futuros ou os dois), com filtro opcional de categorias (produtos/serviços).
-function buildVendedorRangeRows(transactions, vendedor, months, categoryIds) {
+function buildVendedorRangeRows(transactions, vendedor, months, categoryIds, planos) {
   return months.map((m) => {
     const rs = startOfMonth(m);
     const re = endOfMonth(m);
@@ -319,10 +356,7 @@ function buildVendedorRangeRows(transactions, vendedor, months, categoryIds) {
       .forEach((tx) => {
         const valorNoMes = tx.valor * expandOccurrences(tx, rs, re).length;
         vendas += valorNoMes;
-        // Cada venda pode ter uma comissão própria, definida pelo admin na revisão;
-        // sem isso, vale a comissão padrão do vendedor.
-        const pct = tx.comissaoPercentual != null ? tx.comissaoPercentual : (vendedor.comissaoPercentual || 0);
-        comissao += valorNoMes * (pct / 100);
+        comissao += valorNoMes * (comissaoDaVenda(tx, vendedor, planos) / 100);
       });
     const key = monthKey(m);
     const meta = (vendedor.metas && vendedor.metas[key] != null) ? vendedor.metas[key] : (vendedor.metaPadrao || 0);
@@ -331,8 +365,8 @@ function buildVendedorRangeRows(transactions, vendedor, months, categoryIds) {
 }
 
 // Mesma coisa, somando a equipe inteira mês a mês.
-function buildTeamRangeRows(transactions, vendedores, months, categoryIds) {
-  const perVendedor = vendedores.map((v) => buildVendedorRangeRows(transactions, v, months, categoryIds));
+function buildTeamRangeRows(transactions, vendedores, months, categoryIds, planos) {
+  const perVendedor = vendedores.map((v) => buildVendedorRangeRows(transactions, v, months, categoryIds, planos));
   return months.map((m, i) => {
     let vendas = 0, meta = 0, comissao = 0;
     perVendedor.forEach((rows) => { vendas += rows[i].vendas; meta += rows[i].meta; comissao += rows[i].comissao; });
@@ -404,7 +438,7 @@ function buildCancelamentosPorMes(transactions, monthsBack) {
 }
 
 // Ranking de vendedores por vendas dentro de um período (respeita o seletor de período do painel).
-function buildVendedorRanking(transactions, vendedores, rangeStart, rangeEnd) {
+function buildVendedorRanking(transactions, vendedores, rangeStart, rangeEnd, planos) {
   return vendedores
     .map((v) => {
       let vendas = 0;
@@ -414,8 +448,7 @@ function buildVendedorRanking(transactions, vendedores, rangeStart, rangeEnd) {
         .forEach((tx) => {
           const valor = tx.valor * expandOccurrences(tx, rangeStart, rangeEnd).length;
           vendas += valor;
-          const pct = tx.comissaoPercentual != null ? tx.comissaoPercentual : (v.comissaoPercentual || 0);
-          comissao += valor * (pct / 100);
+          comissao += valor * (comissaoDaVenda(tx, v, planos) / 100);
         });
       return { id: v.id, nome: v.nome, vendas: round2(vendas), comissao: round2(comissao) };
     })
@@ -438,6 +471,7 @@ function txToDraft(tx) {
     clienteNome: tx.clienteNome || '',
     contratoMeses: tx.contratoMeses != null ? String(tx.contratoMeses) : '',
     formaPagamento: tx.formaPagamento || '',
+    planoId: tx.planoId || '',
     comissaoPercentual: tx.comissaoPercentual != null ? String(tx.comissaoPercentual) : '',
   };
 }
@@ -907,13 +941,32 @@ function VendedorPanoramaView({ vendedor, rows, isTeam, vendedoresCount, onEditM
    FORMULÁRIO DE LANÇAMENTO + FLUXO DE RECORRÊNCIA
    ========================================================================= */
 
-function TransactionForm({ draft, categories, role, vendedores, onSubmit, onCancel, onDelete, onCancelRecurrence, onApprove, onReject }) {
+function TransactionForm({ draft, categories, role, vendedores, planos, onSubmit, onCancel, onDelete, onCancelRecurrence, onApprove, onReject }) {
   const [local, setLocal] = useState(draft);
   const [error, setError] = useState('');
   const cats = categories.filter((c) => c.tipo === local.tipo);
   // Campos de contrato só fazem sentido em venda (receita atribuída a vendedor).
   const isVenda = local.tipo === 'receita';
   const emRevisao = role === 'admin' && local.status === 'pendente';
+  const planosAtivos = (planos || []).filter((p) => p.ativo !== false);
+  const planoEscolhido = local.planoId ? planosAtivos.find((p) => p.id === local.planoId) : null;
+
+  // Ao escolher um plano negociado, os campos vêm preenchidos com o que o admin
+  // cadastrou (preço, categoria, duração). O admin ainda pode ajustar tudo antes
+  // de aprovar; a comissão do plano vale automaticamente se ninguém sobrescrever.
+  function escolherPlano(planoId) {
+    const p = planosAtivos.find((x) => x.id === planoId);
+    if (!p) { setLocal((l) => ({ ...l, planoId: '' })); return; }
+    setLocal((l) => ({
+      ...l,
+      planoId,
+      valor: p.valor ? String(p.valor) : l.valor,
+      categoriaId: p.categoriaId || l.categoriaId,
+      contratoMeses: p.contratoMeses != null ? String(p.contratoMeses) : l.contratoMeses,
+      recorrente: p.recorrente,
+      frequencia: p.frequencia || l.frequencia,
+    }));
+  }
 
   useEffect(() => {
     if (!cats.some((c) => c.id === local.categoriaId)) {
@@ -949,6 +1002,17 @@ function TransactionForm({ draft, categories, role, vendedores, onSubmit, onCanc
             <ArrowUpCircle size={16} /> Receita
           </button>
         </div>
+      )}
+
+      {isVenda && planosAtivos.length > 0 && (
+        <Field label="Plano negociado" hint={planoEscolhido ? `Comissão do plano: ${planoEscolhido.comissaoPercentual}%. Preencheu os campos abaixo — pode ajustar se precisar.` : 'Escolha um plano para preencher valor, categoria e duração automaticamente.'}>
+          <select value={local.planoId || ''} onChange={(e) => escolherPlano(e.target.value)} style={inputStyle}>
+            <option value="">Sem plano (preencher manualmente)</option>
+            {planosAtivos.map((p) => (
+              <option key={p.id} value={p.id}>{p.nome} · {formatCurrency(p.valor)} · {p.comissaoPercentual}%</option>
+            ))}
+          </select>
+        </Field>
       )}
 
       <Field label="Valor">
@@ -1007,8 +1071,19 @@ function TransactionForm({ draft, categories, role, vendedores, onSubmit, onCanc
       )}
 
       {isVenda && role === 'admin' && local.vendedorId && (
-        <Field label="Comissão desta venda (%)" hint="Deixe em branco para usar a comissão padrão do vendedor.">
-          <input type="number" min="0" max="100" step="0.5" placeholder="Padrão do vendedor" value={local.comissaoPercentual ?? ''} onChange={(e) => set('comissaoPercentual', e.target.value)} style={inputStyle} />
+        <Field
+          label="Comissão desta venda (%)"
+          hint={planoEscolhido
+            ? `Em branco = usa os ${planoEscolhido.comissaoPercentual}% do plano "${planoEscolhido.nome}".`
+            : 'Em branco = usa a comissão padrão do vendedor.'}
+        >
+          <input
+            type="number" min="0" max="100" step="0.5"
+            placeholder={planoEscolhido ? `${planoEscolhido.comissaoPercentual}% (do plano)` : 'Padrão do vendedor'}
+            value={local.comissaoPercentual ?? ''}
+            onChange={(e) => set('comissaoPercentual', e.target.value)}
+            style={inputStyle}
+          />
         </Field>
       )}
 
@@ -1348,7 +1423,7 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
   const growthPct = (prevM && prevM.receita > 0) ? round2(((lastM.receita - prevM.receita) / prevM.receita) * 100) : null;
   const cancelamentos = buildCancelamentosPorMes(txs, 6);
   const totalCancelamentos6m = cancelamentos.reduce((s, c) => s + c.count, 0);
-  const ranking = buildVendedorRanking(txs, data.vendedores, range.start, range.end);
+  const ranking = buildVendedorRanking(txs, data.vendedores, range.start, range.end, data.planos);
   const nenhumWidgetAtivo = role === 'admin' && !widgets.categorias && !widgets.ticketMedio && !widgets.receitaDespesa && !widgets.rankingVendedores && !widgets.cancelamentos;
 
   return (
@@ -1909,7 +1984,7 @@ function EquipeForecast({ data, persist, askConfirm }) {
           )}
 
           {selectedId === 'equipe' ? (
-            <VendedorPanoramaView isTeam vendedoresCount={data.vendedores.length} rows={buildTeamRangeRows(data.transactions, data.vendedores, months, selectedCats)} />
+            <VendedorPanoramaView isTeam vendedoresCount={data.vendedores.length} rows={buildTeamRangeRows(data.transactions, data.vendedores, months, selectedCats, data.planos)} />
           ) : !selectedVendedor ? null : (
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8 }}>
@@ -1923,7 +1998,7 @@ function EquipeForecast({ data, persist, askConfirm }) {
               </div>
               <VendedorPanoramaView
                 vendedor={selectedVendedor}
-                rows={buildVendedorRangeRows(data.transactions, selectedVendedor, months, selectedCats)}
+                rows={buildVendedorRangeRows(data.transactions, selectedVendedor, months, selectedCats, data.planos)}
                 onEditMeta={(monthKeyStr, value) => updateMeta(selectedVendedor.id, monthKeyStr, value)}
               />
             </>
@@ -1958,7 +2033,7 @@ function VendedorForecast({ data, vendedorId }) {
     setSelectedCats((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]));
   }
 
-  const rows = buildVendedorRangeRows(data.transactions, v, months, selectedCats);
+  const rows = buildVendedorRangeRows(data.transactions, v, months, selectedCats, data.planos);
 
   return (
     <div>
@@ -2010,12 +2085,99 @@ function PrevisaoPage({ data, role, currentVendedorId, persist, askConfirm }) {
    PÁGINA: CATEGORIAS
    ========================================================================= */
 
+function PlanoForm({ plano, categories, onSubmit, onCancel }) {
+  const receitaCats = categories.filter((c) => c.tipo === 'receita');
+  const [nome, setNome] = useState(plano?.nome || '');
+  const [valor, setValor] = useState(plano?.valor != null ? String(plano.valor) : '');
+  const [categoriaId, setCategoriaId] = useState(plano?.categoriaId || receitaCats[0]?.id || '');
+  const [comissao, setComissao] = useState(plano?.comissaoPercentual != null ? String(plano.comissaoPercentual) : '5');
+  const [contratoMeses, setContratoMeses] = useState(plano?.contratoMeses != null ? String(plano.contratoMeses) : '');
+  const [recorrente, setRecorrente] = useState(!!plano?.recorrente);
+  const [frequencia, setFrequencia] = useState(plano?.frequencia || 'mensal');
+  const [ativo, setAtivo] = useState(plano?.ativo !== false);
+  const [error, setError] = useState('');
+
+  function submit() {
+    if (!nome.trim()) { setError('Informe o nome do plano.'); return; }
+    if (!valor || parseFloat(valor) <= 0) { setError('Informe o valor do plano.'); return; }
+    onSubmit({
+      id: plano?.id || uid(),
+      nome: nome.trim(),
+      valor: parseFloat(valor) || 0,
+      categoriaId: categoriaId || null,
+      comissaoPercentual: parseFloat(comissao) || 0,
+      contratoMeses: contratoMeses ? (parseInt(contratoMeses, 10) || null) : null,
+      recorrente,
+      frequencia: recorrente ? frequencia : null,
+      ativo,
+    });
+  }
+
+  return (
+    <div>
+      <Field label="Nome do plano"><input type="text" style={inputStyle} value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex.: Plano Rádio Premium" /></Field>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ flex: 1 }}>
+          <Field label="Valor"><input type="number" min="0" step="0.01" style={inputStyle} value={valor} onChange={(e) => setValor(e.target.value)} placeholder="0,00" /></Field>
+        </div>
+        <div style={{ flex: 1 }}>
+          <Field label="Comissão (%)"><input type="number" min="0" max="100" step="0.5" style={inputStyle} value={comissao} onChange={(e) => setComissao(e.target.value)} /></Field>
+        </div>
+      </div>
+      <Field label="Categoria de receita">
+        <select value={categoriaId} onChange={(e) => setCategoriaId(e.target.value)} style={inputStyle}>
+          {receitaCats.length === 0 && <option value="">Crie uma categoria de receita primeiro</option>}
+          {receitaCats.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+        </select>
+      </Field>
+      <Field label="Duração do contrato (meses)" hint="Opcional. Preenche automaticamente ao lançar a venda.">
+        <input type="number" min="0" style={inputStyle} value={contratoMeses} onChange={(e) => setContratoMeses(e.target.value)} placeholder="Ex.: 12" />
+      </Field>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderTop: '1px solid var(--border)' }}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', gap: 6 }}><Repeat size={15} /> Cobrança recorrente</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>O plano se repete automaticamente</div>
+        </div>
+        <Toggle checked={recorrente} onChange={setRecorrente} />
+      </div>
+      {recorrente && (
+        <Field label="Repetir">
+          <select value={frequencia} onChange={(e) => setFrequencia(e.target.value)} style={inputStyle}>
+            <option value="mensal">Todo mês</option>
+            <option value="semanal">Toda semana</option>
+            <option value="anual">Todo ano</option>
+          </select>
+        </Field>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderTop: '1px solid var(--border)' }}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>Disponível para venda</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>Desligue para aposentar o plano sem apagar o histórico</div>
+        </div>
+        <Toggle checked={ativo} onChange={setAtivo} />
+      </div>
+
+      {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{error}</div>}
+      <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+        <Button variant="secondary" onClick={onCancel} style={{ flex: 1 }}>Cancelar</Button>
+        <Button variant="primary" onClick={submit} style={{ flex: 2 }}>Salvar plano</Button>
+      </div>
+    </div>
+  );
+}
+
 function CategoriasPage({ data, persist, askConfirm }) {
+  const [subTab, setSubTab] = useState('categorias');
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [showPlanoForm, setShowPlanoForm] = useState(false);
+  const [editingPlano, setEditingPlano] = useState(null);
 
   const receitaCats = data.categories.filter((c) => c.tipo === 'receita');
   const despesaCats = data.categories.filter((c) => c.tipo === 'despesa');
+  const planos = data.planos || [];
 
   function save(cat) {
     const list = editing ? data.categories.map((c) => (c.id === cat.id ? cat : c)) : [...data.categories, cat];
@@ -2030,9 +2192,81 @@ function CategoriasPage({ data, persist, askConfirm }) {
       : 'Remover esta categoria?';
     askConfirm(msg, () => persist({ ...data, categories: data.categories.filter((c) => c.id !== id) }));
   }
+  function savePlano(p) {
+    const list = editingPlano ? planos.map((x) => (x.id === p.id ? p : x)) : [...planos, p];
+    persist({ ...data, planos: list });
+    setShowPlanoForm(false);
+    setEditingPlano(null);
+  }
+  function removePlano(id) {
+    const inUse = data.transactions.some((t) => t.planoId === id);
+    const msg = inUse
+      ? 'Esse plano já foi usado em vendas. Remover mesmo assim? As vendas continuam, mas passam a usar a comissão padrão do vendedor.'
+      : 'Remover este plano?';
+    askConfirm(msg, () => persist({ ...data, planos: planos.filter((p) => p.id !== id) }));
+  }
+
+  if (subTab === 'planos') {
+    return (
+      <div style={{ paddingTop: 12 }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          <Chip active={false} onClick={() => setSubTab('categorias')}>Categorias</Chip>
+          <Chip active onClick={() => setSubTab('planos')}>Planos negociados</Chip>
+        </div>
+        <p style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 14, lineHeight: 1.5 }}>
+          Cadastre aqui os planos com preço e comissão já definidos. Quando o vendedor escolher um plano ao lançar a venda, os campos vêm preenchidos — e você pode ajustar qualquer coisa antes de aprovar.
+        </p>
+
+        {planos.length === 0 ? (
+          <EmptyState icon={Tag} title="Nenhum plano cadastrado" desc="Crie planos com preço e comissão pré-definidos para agilizar o lançamento das vendas." actionLabel="+ Novo plano" onAction={() => { setEditingPlano(null); setShowPlanoForm(true); }} />
+        ) : (
+          <Card style={{ padding: 0 }}>
+            {planos.map((p, i) => {
+              const cat = data.categories.find((c) => c.id === p.categoriaId);
+              return (
+                <div key={p.id} style={{ padding: 14, borderBottom: i === planos.length - 1 ? 'none' : '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, opacity: p.ativo === false ? 0.5 : 1 }}>
+                      {p.nome}{p.ativo === false && <span style={{ fontWeight: 500, color: 'var(--ink-soft)' }}> (fora de venda)</span>}
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>
+                      {formatCurrency(p.valor)} · comissão {p.comissaoPercentual}%
+                      {cat ? ` · ${cat.nome}` : ''}
+                      {p.contratoMeses ? ` · ${p.contratoMeses} meses` : ''}
+                      {p.recorrente ? ' · recorrente' : ''}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    <button onClick={() => { setEditingPlano(p); setShowPlanoForm(true); }} style={iconBtnStyle}><Edit2 size={15} /></button>
+                    <button onClick={() => removePlano(p.id)} style={iconBtnStyle}><Trash2 size={15} /></button>
+                  </div>
+                </div>
+              );
+            })}
+          </Card>
+        )}
+
+        {planos.length > 0 && (
+          <Button variant="primary" onClick={() => { setEditingPlano(null); setShowPlanoForm(true); }} style={{ width: '100%', marginTop: 16 }}>
+            <Plus size={16} /> Novo plano
+          </Button>
+        )}
+
+        {showPlanoForm && (
+          <Modal title={editingPlano ? 'Editar plano' : 'Novo plano negociado'} onClose={() => { setShowPlanoForm(false); setEditingPlano(null); }}>
+            <PlanoForm plano={editingPlano} categories={data.categories} onSubmit={savePlano} onCancel={() => { setShowPlanoForm(false); setEditingPlano(null); }} />
+          </Modal>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div style={{ paddingTop: 12 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <Chip active onClick={() => setSubTab('categorias')}>Categorias</Chip>
+        <Chip active={false} onClick={() => setSubTab('planos')}>Planos negociados</Chip>
+      </div>
       <p style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 14, lineHeight: 1.5 }}>
         Organize suas receitas e despesas em categorias para os gráficos e a previsão ficarem certinhos.
       </p>
@@ -2393,11 +2627,12 @@ export default function App() {
   async function loadData(s) {
     const userId = s.user.id;
     try {
-      const [profileRes, catRes, vendRes, txRes] = await Promise.all([
+      const [profileRes, catRes, vendRes, txRes, planoRes] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', userId).single(),
         supabase.from('categories').select('*').order('nome'),
         supabase.from('vendedores').select('*'),
         supabase.from('transactions').select('*'),
+        supabase.from('planos').select('*').order('nome'),
       ]);
       const profile = profileRes.data;
       const vendedores = (vendRes.data || []).map(rowToVendedor);
@@ -2407,6 +2642,7 @@ export default function App() {
         categories: catRes.data || [],
         transactions: (txRes.data || []).map(rowToTx),
         vendedores,
+        planos: (planoRes.data || []).map(rowToPlano),
         uiPrefs: {
           dashboardWidgets: (profile?.dashboard_widgets && Object.keys(profile.dashboard_widgets).length)
             ? profile.dashboard_widgets
@@ -2460,6 +2696,18 @@ export default function App() {
       }
       for (const v of prevVends) {
         if (!newVends.find((x) => x.id === v.id)) await supabase.from('vendedores').delete().eq('id', v.id);
+      }
+
+      // planos negociados
+      const prevPlanos = prev?.planos || [];
+      const newPlanos = newData.planos || [];
+      for (const p of newPlanos) {
+        const before = prevPlanos.find((x) => x.id === p.id);
+        if (!before) await supabase.from('planos').insert(planoToRow(p));
+        else if (JSON.stringify(before) !== JSON.stringify(p)) await supabase.from('planos').update(planoToRow(p)).eq('id', p.id);
+      }
+      for (const p of prevPlanos) {
+        if (!newPlanos.find((x) => x.id === p.id)) await supabase.from('planos').delete().eq('id', p.id);
       }
 
       // lançamentos
@@ -2516,6 +2764,7 @@ export default function App() {
       clienteNome: '',
       contratoMeses: '',
       formaPagamento: '',
+      planoId: '',
       comissaoPercentual: '',
     });
     setTxStep('form');
@@ -2571,6 +2820,7 @@ export default function App() {
       clienteNome: draft.clienteNome || '',
       contratoMeses: draft.contratoMeses ? (parseInt(draft.contratoMeses, 10) || null) : null,
       formaPagamento: draft.formaPagamento || '',
+      planoId: draft.planoId || null,
       comissaoPercentual: (draft.comissaoPercentual !== '' && draft.comissaoPercentual != null)
         ? (parseFloat(draft.comissaoPercentual) || 0)
         : null,
@@ -2695,6 +2945,7 @@ export default function App() {
                 categories={data.categories}
                 role={role}
                 vendedores={data.vendedores}
+                planos={data.planos}
                 onSubmit={handleFormSubmit}
                 onCancel={closeTxModal}
                 onDelete={editingTx ? () => requestDeleteTransaction(editingTx) : null}
