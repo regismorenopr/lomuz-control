@@ -1898,6 +1898,7 @@ function LoginScreen() {
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
   const [nome, setNome] = useState('');
+  const [lembrar, setLembrar] = useState(true);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [loading, setLoading] = useState(false);
@@ -1905,9 +1906,21 @@ function LoginScreen() {
   async function submit() {
     setError('');
     setInfo('');
+
+    if (mode === 'reset') {
+      if (!email.trim()) { setError('Preencha o e-mail.'); return; }
+      setLoading(true);
+      const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: window.location.origin });
+      setLoading(false);
+      if (err) setError('Não foi possível enviar o link. Tente novamente.');
+      else setInfo('Se esse e-mail tiver uma conta, enviamos um link para redefinir a senha.');
+      return;
+    }
+
     if (!email.trim() || !senha) { setError('Preencha e-mail e senha.'); return; }
     setLoading(true);
     if (mode === 'login') {
+      localStorage.setItem('lomuz-remember', lembrar ? 'true' : 'false');
       const { error: err } = await supabase.auth.signInWithPassword({ email: email.trim(), password: senha });
       if (err) setError('E-mail ou senha incorretos.');
     } else {
@@ -1922,13 +1935,21 @@ function LoginScreen() {
     setLoading(false);
   }
 
+  function trocarModo(novo) {
+    setMode(novo);
+    setError('');
+    setInfo('');
+  }
+
+  const titulos = { login: 'Entre com sua conta', signup: 'Crie sua conta', reset: 'Redefinir senha' };
+
   return (
     <div className="lomuz-app" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
       <style>{GLOBAL_CSS}</style>
       <div style={{ width: '100%', maxWidth: 360 }}>
         <div className="lomuz-display" style={{ fontSize: 26, fontWeight: 600, color: 'var(--brand)', textAlign: 'center', marginBottom: 4 }}>Lomuz Control</div>
         <p style={{ textAlign: 'center', color: 'var(--ink-soft)', fontSize: 13, marginBottom: 24 }}>
-          {mode === 'login' ? 'Entre com sua conta' : 'Crie sua conta'}
+          {titulos[mode]}
         </p>
         <Card>
           {mode === 'signup' && (
@@ -1939,21 +1960,79 @@ function LoginScreen() {
           <Field label="E-mail">
             <input type="email" style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="voce@email.com" />
           </Field>
-          <Field label="Senha">
-            <input type="password" style={inputStyle} value={senha} onChange={(e) => setSenha(e.target.value)} placeholder="••••••••" />
-          </Field>
+          {mode !== 'reset' && (
+            <Field label="Senha">
+              <input type="password" style={inputStyle} value={senha} onChange={(e) => setSenha(e.target.value)} placeholder="••••••••" />
+            </Field>
+          )}
+          {mode === 'login' && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, cursor: 'pointer' }}>
+              <input type="checkbox" checked={lembrar} onChange={(e) => setLembrar(e.target.checked)} style={{ width: 16, height: 16, accentColor: 'var(--brand)' }} />
+              <span style={{ fontSize: 13, color: 'var(--ink-soft)' }}>Lembrar de mim neste dispositivo</span>
+            </label>
+          )}
           {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{error}</div>}
           {info && <div style={{ color: 'var(--positive)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{info}</div>}
           <Button variant="primary" onClick={submit} style={{ width: '100%' }} disabled={loading}>
-            {loading ? 'Aguarde…' : (mode === 'login' ? 'Entrar' : 'Criar conta')}
+            {loading ? 'Aguarde…' : mode === 'login' ? 'Entrar' : mode === 'signup' ? 'Criar conta' : 'Enviar link de redefinição'}
           </Button>
         </Card>
+
+        {mode === 'login' && (
+          <button
+            onClick={() => trocarModo('reset')}
+            style={{ display: 'block', margin: '14px auto 0', background: 'none', border: 'none', color: 'var(--ink-soft)', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }}
+          >
+            Esqueci minha senha
+          </button>
+        )}
+
         <button
-          onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setError(''); setInfo(''); }}
-          style={{ display: 'block', margin: '16px auto 0', background: 'none', border: 'none', color: 'var(--brand)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
+          onClick={() => trocarModo(mode === 'signup' ? 'login' : mode === 'reset' ? 'login' : 'signup')}
+          style={{ display: 'block', margin: '10px auto 0', background: 'none', border: 'none', color: 'var(--brand)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
         >
-          {mode === 'login' ? 'Não tem conta? Criar uma' : 'Já tem conta? Entrar'}
+          {mode === 'signup' ? 'Já tem conta? Entrar' : mode === 'reset' ? 'Voltar para o login' : 'Não tem conta? Criar uma'}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function ResetPasswordScreen({ onDone }) {
+  const [senha, setSenha] = useState('');
+  const [confirmar, setConfirmar] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function submit() {
+    setError('');
+    if (senha.length < 6) { setError('A senha precisa ter pelo menos 6 caracteres.'); return; }
+    if (senha !== confirmar) { setError('As senhas não são iguais.'); return; }
+    setLoading(true);
+    const { error: err } = await supabase.auth.updateUser({ password: senha });
+    setLoading(false);
+    if (err) { setError('Não foi possível salvar a nova senha. Peça um novo link e tente de novo.'); return; }
+    onDone();
+  }
+
+  return (
+    <div className="lomuz-app" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <style>{GLOBAL_CSS}</style>
+      <div style={{ width: '100%', maxWidth: 360 }}>
+        <div className="lomuz-display" style={{ fontSize: 26, fontWeight: 600, color: 'var(--brand)', textAlign: 'center', marginBottom: 4 }}>Lomuz Control</div>
+        <p style={{ textAlign: 'center', color: 'var(--ink-soft)', fontSize: 13, marginBottom: 24 }}>Defina sua nova senha</p>
+        <Card>
+          <Field label="Nova senha">
+            <input type="password" style={inputStyle} value={senha} onChange={(e) => setSenha(e.target.value)} placeholder="••••••••" />
+          </Field>
+          <Field label="Confirmar nova senha">
+            <input type="password" style={inputStyle} value={confirmar} onChange={(e) => setConfirmar(e.target.value)} placeholder="••••••••" />
+          </Field>
+          {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{error}</div>}
+          <Button variant="primary" onClick={submit} style={{ width: '100%' }} disabled={loading}>
+            {loading ? 'Salvando…' : 'Salvar nova senha'}
+          </Button>
+        </Card>
       </div>
     </div>
   );
@@ -1977,10 +2056,14 @@ export default function App() {
   const [txStep, setTxStep] = useState('form');
 
   const [confirmDialog, setConfirmDialog] = useState(null);
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: s } }) => setSession(s));
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      if (event === 'PASSWORD_RECOVERY') setPasswordRecovery(true);
+      setSession(s);
+    });
     return () => sub.subscription.unsubscribe();
   }, []);
 
@@ -2202,6 +2285,10 @@ export default function App() {
         <span style={{ fontSize: 14, color: 'var(--ink-soft)' }}>Carregando…</span>
       </div>
     );
+  }
+
+  if (passwordRecovery) {
+    return <ResetPasswordScreen onDone={() => setPasswordRecovery(false)} />;
   }
 
   if (!session) {
