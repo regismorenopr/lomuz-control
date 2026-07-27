@@ -7,7 +7,7 @@ import {
   Home, Receipt, TrendingUp, Tag, Plus, X, Calendar, ChevronRight, Repeat, Check,
   ArrowUpCircle, ArrowDownCircle, Users, Trash2, Edit2, Clock, Target, Upload,
   Utensils, Car, Film, HeartPulse, ShoppingBag, Briefcase, GraduationCap, Wallet,
-  Gift, Smartphone, PawPrint, MoreHorizontal
+  Gift, Smartphone, PawPrint, MoreHorizontal, Sparkles
 } from 'lucide-react';
 import Papa from 'papaparse';
 import { supabase } from './supabaseClient';
@@ -254,22 +254,99 @@ function buildCategoryForecastRows(transactions, categoryIds, monthsCount) {
   return rows;
 }
 
-function buildVendedorForecastRows(transactions, vendedor, monthsCount) {
-  const today = new Date();
-  const rows = [];
-  for (let i = 0; i < monthsCount; i += 1) {
-    const m = addMonths(startOfMonth(today), i);
+/* =========================================================================
+   PAINEL DE VENDEDORES (panorama de vendas, metas e comissão por período)
+   ========================================================================= */
+
+// Lista de meses (1º dia de cada mês) entre "start" e "end", nessa ordem cronológica,
+// funcionando tanto pra intervalos futuros quanto passados.
+function monthsBetween(start, end) {
+  const s = startOfMonth(start);
+  const e = startOfMonth(end);
+  const months = [];
+  const step = s <= e ? 1 : -1;
+  let cursor = s;
+  while (true) {
+    months.push(cursor);
+    if (monthKey(cursor) === monthKey(e)) break;
+    cursor = addMonths(cursor, step);
+  }
+  if (step === -1) months.reverse();
+  return months;
+}
+
+function monthInputValue(date) { return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}`; }
+function parseMonthInput(str) {
+  const [y, m] = str.split('-').map(Number);
+  return new Date(y, (m || 1) - 1, 1);
+}
+
+function computeMonthsForRange(mode, customFrom, customTo) {
+  const today = startOfMonth(new Date());
+  if (mode === 'prox3') return monthsBetween(today, addMonths(today, 2));
+  if (mode === 'prox6') return monthsBetween(today, addMonths(today, 5));
+  if (mode === 'prox12') return monthsBetween(today, addMonths(today, 11));
+  const from = customFrom ? parseMonthInput(customFrom) : today;
+  const to = customTo ? parseMonthInput(customTo) : today;
+  return monthsBetween(from, to);
+}
+
+// Vendido/meta/comissão de um vendedor mês a mês, numa lista arbitrária de meses
+// (passados, futuros ou os dois), com filtro opcional de categorias (produtos/serviços).
+function buildVendedorRangeRows(transactions, vendedor, months, categoryIds) {
+  return months.map((m) => {
     const rs = startOfMonth(m);
     const re = endOfMonth(m);
     let vendas = 0;
     transactions
-      .filter((t) => t.vendedorId === vendedor.id && t.tipo === 'receita')
+      .filter((t) => t.vendedorId === vendedor.id && t.tipo === 'receita'
+        && (!categoryIds || categoryIds.length === 0 || categoryIds.includes(t.categoriaId)))
       .forEach((tx) => { vendas += tx.valor * expandOccurrences(tx, rs, re).length; });
     const key = monthKey(m);
     const meta = (vendedor.metas && vendedor.metas[key] != null) ? vendedor.metas[key] : (vendedor.metaPadrao || 0);
-    rows.push({ key, label: monthLabel(m), vendas: round2(vendas), meta: round2(meta) });
+    const comissao = round2(vendas * ((vendedor.comissaoPercentual || 0) / 100));
+    return { key, label: monthLabel(m), vendas: round2(vendas), meta: round2(meta), comissao };
+  });
+}
+
+// Mesma coisa, somando a equipe inteira mês a mês.
+function buildTeamRangeRows(transactions, vendedores, months, categoryIds) {
+  const perVendedor = vendedores.map((v) => buildVendedorRangeRows(transactions, v, months, categoryIds));
+  return months.map((m, i) => {
+    let vendas = 0, meta = 0, comissao = 0;
+    perVendedor.forEach((rows) => { vendas += rows[i].vendas; meta += rows[i].meta; comissao += rows[i].comissao; });
+    return { key: monthKey(m), label: monthLabel(m), vendas: round2(vendas), meta: round2(meta), comissao: round2(comissao) };
+  });
+}
+
+// Mensagem motivacional baseada no desempenho (meta batida, quase lá, ou abaixo) —
+// o tom da sugestão é sempre construtivo, só a cor de destaque muda.
+function buildMotivationalMessage(rows, nome) {
+  const comMeta = rows.filter((r) => r.meta > 0);
+  if (comMeta.length === 0) {
+    return { tone: 'neutral', text: `Defina uma meta mensal para ${nome} pra acompanhar o progresso e receber sugestões automáticas.` };
   }
-  return rows;
+  const avgPct = Math.round((comMeta.reduce((s, r) => s + r.vendas / r.meta, 0) / comMeta.length) * 100);
+  const last = comMeta[comMeta.length - 1];
+  const prev = comMeta.length > 1 ? comMeta[comMeta.length - 2] : null;
+  const melhorando = prev ? last.vendas > prev.vendas : false;
+
+  if (avgPct >= 100) {
+    return {
+      tone: 'positive',
+      text: `${nome} está batendo a meta — média de ${avgPct}% no período! Que tal propor uma meta 10% maior pro próximo mês, com algum incentivo extra pra manter o ritmo?`,
+    };
+  }
+  if (avgPct >= 70) {
+    return {
+      tone: 'warning',
+      text: `${nome} está em ${avgPct}% da meta, bem perto de bater. ${melhorando ? 'A tendência já é de melhora — ' : ''}vale focar nos produtos ou serviços com melhor conversão pra fechar o período com força.`,
+    };
+  }
+  return {
+    tone: 'negative',
+    text: `${nome} está em ${avgPct}% da meta no período. Pode ser um bom momento pra conversar sobre os desafios e ajustar junto o foco — priorizar os contatos mais quentes e revisar uma meta mais realista de curto prazo costuma ajudar a retomar o ritmo.`,
+  };
 }
 
 // Evolução da empresa: receita x despesa mês a mês, últimos N meses (incluindo o atual).
@@ -690,6 +767,104 @@ function MonthsPeriodSelector({ mode, setMode, custom, setCustom }) {
           <input type="number" min="1" max="36" value={custom} onChange={(e) => setCustom(e.target.value)} style={{ ...inputStyle, width: 80 }} />
         </div>
       )}
+    </div>
+  );
+}
+
+// Seletor de período por mês/ano, com atalhos pros próximos 3/6/12 meses e um
+// intervalo personalizado que pode ir tanto pro passado quanto pro futuro.
+function RangePeriodSelector({ mode, setMode, customFrom, setCustomFrom, customTo, setCustomTo }) {
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Chip active={mode === 'prox3'} onClick={() => setMode('prox3')}>Próx. 3 meses</Chip>
+        <Chip active={mode === 'prox6'} onClick={() => setMode('prox6')}>Próx. 6 meses</Chip>
+        <Chip active={mode === 'prox12'} onClick={() => setMode('prox12')}>Próx. 12 meses</Chip>
+        <Chip active={mode === 'custom'} onClick={() => setMode('custom')}>Personalizado</Chip>
+      </div>
+      {mode === 'custom' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+          <label style={{ flex: 1, minWidth: 120 }}>
+            <span style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: 'var(--ink-soft)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.4 }}>De</span>
+            <input type="month" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} style={inputStyle} />
+          </label>
+          <label style={{ flex: 1, minWidth: 120 }}>
+            <span style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: 'var(--ink-soft)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.4 }}>Até</span>
+            <input type="month" value={customTo} onChange={(e) => setCustomTo(e.target.value)} style={inputStyle} />
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Cartão de resumo + mensagem motivacional + meta x realizado mês a mês,
+// usado tanto pra um vendedor individual quanto pra soma da equipe toda.
+function VendedorPanoramaView({ vendedor, rows, isTeam, vendedoresCount, onEditMeta }) {
+  const totalVendas = rows.reduce((s, r) => s + r.vendas, 0);
+  const totalComissao = rows.reduce((s, r) => s + r.comissao, 0);
+  const msg = !isTeam && vendedor ? buildMotivationalMessage(rows, vendedor.nome) : null;
+  const msgColors = {
+    positive: { border: 'var(--positive)', bg: 'var(--positive-soft)' },
+    warning: { border: 'var(--gold)', bg: '#FBF3E1' },
+    negative: { border: 'var(--negative)', bg: 'var(--negative-soft)' },
+    neutral: { border: 'var(--border)', bg: 'var(--surface-2)' },
+  };
+
+  return (
+    <div>
+      <Card style={{ background: '#13251F', color: '#fff', border: 'none', marginBottom: 16 }}>
+        <div style={{ fontSize: 11.5, opacity: 0.7, textTransform: 'uppercase', fontWeight: 700 }}>
+          {isTeam ? `Equipe toda · ${vendedoresCount} vendedor(es)` : `${vendedor.nome} · comissão ${vendedor.comissaoPercentual}%`}
+        </div>
+        <div style={{ display: 'flex', gap: 24, marginTop: 10, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 11, opacity: 0.65 }}>Vendido no período</div>
+            <div className="lomuz-display" style={{ fontSize: 22 }}>{formatCurrency(totalVendas)}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, opacity: 0.65 }}>Comissão a receber</div>
+            <div className="lomuz-display" style={{ fontSize: 22, color: '#8FE3B8' }}>{formatCurrency(totalComissao)}</div>
+          </div>
+        </div>
+      </Card>
+
+      {msg && (
+        <Card style={{ marginBottom: 16, borderColor: msgColors[msg.tone].border, background: msgColors[msg.tone].bg }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <Sparkles size={16} style={{ marginTop: 2, flexShrink: 0, color: msgColors[msg.tone].border }} />
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>{msg.text}</p>
+          </div>
+        </Card>
+      )}
+
+      <SectionTitle icon={Target}>Meta x realizado por mês</SectionTitle>
+      {rows.length === 0 ? (
+        <Card><p style={{ fontSize: 13, color: 'var(--ink-soft)', margin: 0 }}>Nenhum mês no período selecionado.</p></Card>
+      ) : rows.map((r) => {
+        const pct = r.meta > 0 ? Math.round((r.vendas / r.meta) * 100) : null;
+        const accent = pct == null ? 'var(--border)' : pct >= 100 ? 'var(--positive)' : pct >= 70 ? 'var(--gold)' : 'var(--negative)';
+        return (
+          <Card key={r.key} style={{ marginBottom: 10, borderLeft: `4px solid ${accent}` }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
+              <span>{r.label}</span>
+              <span style={{ color: pct == null ? 'var(--ink-soft)' : accent }}>{pct != null ? `${pct}%` : 'sem meta'}</span>
+            </div>
+            {pct != null && <ProgressBar pct={Math.min(150, pct)} />}
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: 'var(--ink-soft)', marginTop: 6, flexWrap: 'wrap', gap: 8 }}>
+              <span>Vendido: {formatCurrency(r.vendas)}</span>
+              {onEditMeta ? (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  Meta: <input type="number" defaultValue={r.meta} onBlur={(e) => onEditMeta(r.key, e.target.value)} style={{ ...inputStyle, padding: '3px 6px', fontSize: 11.5, width: 80 }} />
+                </span>
+              ) : (
+                <span>Meta: {formatCurrency(r.meta)}</span>
+              )}
+              <span>Comissão: {formatCurrency(r.comissao)}</span>
+            </div>
+          </Card>
+        );
+      })}
     </div>
   );
 }
@@ -1532,15 +1707,38 @@ function CategoryForecast({ data, selectedCats, setSelectedCats, periodMode, set
   );
 }
 
-function EquipeForecast({ data, persist, monthsCount, periodMode, setPeriodMode, customMonths, setCustomMonths, askConfirm }) {
+function EquipeForecast({ data, persist, askConfirm }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [rangeMode, setRangeMode] = useState('prox3');
+  const [customFrom, setCustomFrom] = useState(() => monthInputValue(new Date()));
+  const [customTo, setCustomTo] = useState(() => monthInputValue(addMonths(new Date(), 2)));
+  const [selectedCats, setSelectedCats] = useState([]);
+  const [selectedId, setSelectedId] = useState('equipe');
+  const [inviteStatus, setInviteStatus] = useState('');
 
-  function saveVendedor(v) {
+  const months = useMemo(() => computeMonthsForRange(rangeMode, customFrom, customTo), [rangeMode, customFrom, customTo]);
+  const receitaCats = data.categories.filter((c) => c.tipo === 'receita');
+
+  function toggleCat(id) {
+    setSelectedCats((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]));
+  }
+  async function saveVendedor(v) {
+    const isNovo = !editing;
     const list = editing ? data.vendedores.map((x) => (x.id === v.id ? v : x)) : [...data.vendedores, v];
     persist({ ...data, vendedores: list });
     setShowForm(false);
     setEditing(null);
+
+    if (isNovo && v.conviteEmail && !v.profileId) {
+      setInviteStatus('Enviando convite por e-mail...');
+      const { data: res, error } = await supabase.functions.invoke('invite-vendedor', {
+        body: { email: v.conviteEmail, nome: v.nome },
+      });
+      if (error || res?.error) setInviteStatus(`Não foi possível enviar o convite por e-mail (${v.conviteEmail}). A pessoa ainda pode criar a conta manualmente na tela de login.`);
+      else setInviteStatus(`Convite enviado por e-mail para ${v.conviteEmail}.`);
+      setTimeout(() => setInviteStatus(''), 6000);
+    }
   }
   function removeVendedor(id) {
     askConfirm('Remover este vendedor? As vendas já registradas continuam no histórico, mas deixam de contar para ele.', () => {
@@ -1549,6 +1747,7 @@ function EquipeForecast({ data, persist, monthsCount, periodMode, setPeriodMode,
         vendedores: data.vendedores.filter((v) => v.id !== id),
         transactions: data.transactions.map((t) => (t.vendedorId === id ? { ...t, vendedorId: null } : t)),
       });
+      if (selectedId === id) setSelectedId('equipe');
     });
   }
   function updateMeta(vendedorId, monthKeyStr, value) {
@@ -1557,9 +1756,13 @@ function EquipeForecast({ data, persist, monthsCount, periodMode, setPeriodMode,
     persist({ ...data, vendedores: data.vendedores.map((x) => (x.id === vendedorId ? { ...x, metas } : x)) });
   }
 
+  const selectedVendedor = selectedId !== 'equipe' ? data.vendedores.find((v) => v.id === selectedId) : null;
+
   return (
     <div>
-      <MonthsPeriodSelector mode={periodMode} setMode={setPeriodMode} custom={customMonths} setCustom={setCustomMonths} />
+      {inviteStatus && (
+        <div style={{ fontSize: 12.5, color: 'var(--brand)', fontWeight: 600, marginBottom: 10 }}>{inviteStatus}</div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
         <Button variant="secondary" onClick={() => { setEditing(null); setShowForm(true); }} style={{ fontSize: 13, padding: '8px 12px' }}>
           <Plus size={14} /> Vendedor
@@ -1569,56 +1772,45 @@ function EquipeForecast({ data, persist, monthsCount, periodMode, setPeriodMode,
       {data.vendedores.length === 0 ? (
         <EmptyState icon={Users} title="Nenhum vendedor cadastrado" desc="Adicione vendedores para acompanhar vendas, comissão e metas." actionLabel="+ Adicionar vendedor" onAction={() => setShowForm(true)} />
       ) : (
-        data.vendedores.map((v) => {
-          const rows = buildVendedorForecastRows(data.transactions, v, monthsCount);
-          return (
-            <Card key={v.id} style={{ marginBottom: 16 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10, gap: 8 }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, fontSize: 15 }}>{v.nome}</div>
-                  <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>Comissão {v.comissaoPercentual}% · Meta padrão {formatCurrency(v.metaPadrao || 0)}</div>
-                  <div style={{ fontSize: 11.5, marginTop: 2, color: v.profileId ? 'var(--positive)' : '#8A6A1F', fontWeight: 600 }}>
-                    {v.profileId ? '✓ Conta vinculada' : `Aguardando cadastro (${v.conviteEmail})`}
-                  </div>
+        <>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+            <Chip active={selectedId === 'equipe'} onClick={() => setSelectedId('equipe')}>Equipe toda</Chip>
+            {data.vendedores.map((v) => (
+              <Chip key={v.id} active={selectedId === v.id} onClick={() => setSelectedId(v.id)}>{v.nome}</Chip>
+            ))}
+          </div>
+
+          <RangePeriodSelector mode={rangeMode} setMode={setRangeMode} customFrom={customFrom} setCustomFrom={setCustomFrom} customTo={customTo} setCustomTo={setCustomTo} />
+
+          {receitaCats.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+              {receitaCats.map((c) => (
+                <Chip key={c.id} active={selectedCats.includes(c.id)} onClick={() => toggleCat(c.id)}>{c.nome}</Chip>
+              ))}
+            </div>
+          )}
+
+          {selectedId === 'equipe' ? (
+            <VendedorPanoramaView isTeam vendedoresCount={data.vendedores.length} rows={buildTeamRangeRows(data.transactions, data.vendedores, months, selectedCats)} />
+          ) : !selectedVendedor ? null : (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8 }}>
+                <div style={{ fontSize: 12, color: selectedVendedor.profileId ? 'var(--positive)' : '#8A6A1F', fontWeight: 600 }}>
+                  {selectedVendedor.profileId ? '✓ Conta vinculada' : `Aguardando cadastro (${selectedVendedor.conviteEmail})`}
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                  <button onClick={() => { setEditing(v); setShowForm(true); }} style={iconBtnStyle}><Edit2 size={15} /></button>
-                  <button onClick={() => removeVendedor(v.id)} style={iconBtnStyle}><Trash2 size={15} /></button>
+                  <button onClick={() => { setEditing(selectedVendedor); setShowForm(true); }} style={iconBtnStyle}><Edit2 size={15} /></button>
+                  <button onClick={() => removeVendedor(selectedVendedor.id)} style={iconBtnStyle}><Trash2 size={15} /></button>
                 </div>
               </div>
-              <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={rows}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                  <YAxis tick={{ fontSize: 10 }} width={36} tickFormatter={(val) => `${Math.round(val / 1000)}k`} />
-                  <Tooltip formatter={(val) => formatCurrency(val)} />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Bar dataKey="vendas" name="Vendido" fill="var(--positive)" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="meta" name="Meta" fill="var(--gold)" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginTop: 10 }}>
-                  <thead>
-                    <tr><th style={thStyle}>Mês</th><th style={thStyle}>Vendido</th><th style={thStyle}>Meta</th><th style={thStyle}>Comissão</th></tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((r) => (
-                      <tr key={r.key}>
-                        <td style={tdStyle}>{r.label}</td>
-                        <td style={tdStyle}>{formatCurrency(r.vendas)}</td>
-                        <td style={tdStyle}>
-                          <input type="number" defaultValue={r.meta} onBlur={(e) => updateMeta(v.id, r.key, e.target.value)} style={{ ...inputStyle, padding: '4px 6px', fontSize: 12, width: 90 }} />
-                        </td>
-                        <td style={tdStyle}>{formatCurrency(r.vendas * (v.comissaoPercentual / 100))}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          );
-        })
+              <VendedorPanoramaView
+                vendedor={selectedVendedor}
+                rows={buildVendedorRangeRows(data.transactions, selectedVendedor, months, selectedCats)}
+                onEditMeta={(monthKeyStr, value) => updateMeta(selectedVendedor.id, monthKeyStr, value)}
+              />
+            </>
+          )}
+        </>
       )}
 
       {showForm && (
@@ -1630,61 +1822,37 @@ function EquipeForecast({ data, persist, monthsCount, periodMode, setPeriodMode,
   );
 }
 
-function VendedorForecast({ data, vendedorId, monthsCount, periodMode, setPeriodMode, customMonths, setCustomMonths }) {
+function VendedorForecast({ data, vendedorId }) {
+  const [rangeMode, setRangeMode] = useState('prox3');
+  const [customFrom, setCustomFrom] = useState(() => monthInputValue(new Date()));
+  const [customTo, setCustomTo] = useState(() => monthInputValue(addMonths(new Date(), 2)));
+  const [selectedCats, setSelectedCats] = useState([]);
+
   const v = data.vendedores.find((x) => x.id === vendedorId);
+  const months = useMemo(() => computeMonthsForRange(rangeMode, customFrom, customTo), [rangeMode, customFrom, customTo]);
+  const receitaCats = data.categories.filter((c) => c.tipo === 'receita');
+
   if (!v) {
     return <EmptyState icon={Users} title="Nenhum vendedor selecionado" desc="Peça ao administrador para cadastrar seu perfil de vendedor." />;
   }
-  const rows = buildVendedorForecastRows(data.transactions, v, monthsCount);
-  const totalVendas = rows.reduce((s, r) => s + r.vendas, 0);
-  const totalComissao = rows.reduce((s, r) => s + r.vendas * (v.comissaoPercentual / 100), 0);
+
+  function toggleCat(id) {
+    setSelectedCats((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]));
+  }
+
+  const rows = buildVendedorRangeRows(data.transactions, v, months, selectedCats);
 
   return (
     <div>
-      <MonthsPeriodSelector mode={periodMode} setMode={setPeriodMode} custom={customMonths} setCustom={setCustomMonths} />
-      <Card style={{ background: '#13251F', color: '#fff', border: 'none', marginBottom: 16 }}>
-        <div style={{ fontSize: 11.5, opacity: 0.7, textTransform: 'uppercase', fontWeight: 700 }}>{v.nome} · comissão {v.comissaoPercentual}%</div>
-        <div style={{ display: 'flex', gap: 24, marginTop: 10 }}>
-          <div>
-            <div style={{ fontSize: 11, opacity: 0.65 }}>Vendas no período</div>
-            <div className="lomuz-display" style={{ fontSize: 22 }}>{formatCurrency(totalVendas)}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, opacity: 0.65 }}>Comissão a receber</div>
-            <div className="lomuz-display" style={{ fontSize: 22, color: '#8FE3B8' }}>{formatCurrency(totalComissao)}</div>
-          </div>
+      <RangePeriodSelector mode={rangeMode} setMode={setRangeMode} customFrom={customFrom} setCustomFrom={setCustomFrom} customTo={customTo} setCustomTo={setCustomTo} />
+      {receitaCats.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+          {receitaCats.map((c) => (
+            <Chip key={c.id} active={selectedCats.includes(c.id)} onClick={() => toggleCat(c.id)}>{c.nome}</Chip>
+          ))}
         </div>
-      </Card>
-
-      <ResponsiveContainer width="100%" height={200}>
-        <BarChart data={rows}>
-          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-          <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-          <YAxis tick={{ fontSize: 10 }} width={36} tickFormatter={(val) => `${Math.round(val / 1000)}k`} />
-          <Tooltip formatter={(val) => formatCurrency(val)} />
-          <Legend wrapperStyle={{ fontSize: 11 }} />
-          <Bar dataKey="vendas" name="Vendido" fill="var(--positive)" radius={[4, 4, 0, 0]} />
-          <Bar dataKey="meta" name="Meta" fill="var(--gold)" radius={[4, 4, 0, 0]} />
-        </BarChart>
-      </ResponsiveContainer>
-
-      <SectionTitle icon={Target}>Meta x realizado</SectionTitle>
-      {rows.map((r) => {
-        const pct = r.meta > 0 ? Math.min(150, Math.round((r.vendas / r.meta) * 100)) : 0;
-        return (
-          <Card key={r.key} style={{ marginBottom: 10 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
-              <span>{r.label}</span><span>{pct}%</span>
-            </div>
-            <ProgressBar pct={pct} />
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: 'var(--ink-soft)', marginTop: 6, flexWrap: 'wrap', gap: 4 }}>
-              <span>Vendido: {formatCurrency(r.vendas)}</span>
-              <span>Meta: {formatCurrency(r.meta)}</span>
-              <span>Comissão: {formatCurrency(r.vendas * (v.comissaoPercentual / 100))}</span>
-            </div>
-          </Card>
-        );
-      })}
+      )}
+      <VendedorPanoramaView vendedor={v} rows={rows} />
     </div>
   );
 }
@@ -1700,7 +1868,7 @@ function PrevisaoPage({ data, role, currentVendedorId, persist, askConfirm }) {
   if (role === 'vendedor') {
     return (
       <div style={{ paddingTop: 12 }}>
-        <VendedorForecast data={data} vendedorId={currentVendedorId} monthsCount={monthsCount} periodMode={periodMode} setPeriodMode={setPeriodMode} customMonths={customMonths} setCustomMonths={setCustomMonths} />
+        <VendedorForecast data={data} vendedorId={currentVendedorId} />
       </div>
     );
   }
@@ -1714,7 +1882,7 @@ function PrevisaoPage({ data, role, currentVendedorId, persist, askConfirm }) {
       {subTab === 'financeiro' ? (
         <CategoryForecast data={data} selectedCats={selectedCats} setSelectedCats={setSelectedCats} periodMode={periodMode} setPeriodMode={setPeriodMode} customMonths={customMonths} setCustomMonths={setCustomMonths} monthsCount={monthsCount} />
       ) : (
-        <EquipeForecast data={data} persist={persist} monthsCount={monthsCount} periodMode={periodMode} setPeriodMode={setPeriodMode} customMonths={customMonths} setCustomMonths={setCustomMonths} askConfirm={askConfirm} />
+        <EquipeForecast data={data} persist={persist} askConfirm={askConfirm} />
       )}
     </div>
   );
