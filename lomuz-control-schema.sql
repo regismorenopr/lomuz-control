@@ -13,6 +13,7 @@ create table profiles (
   nome text not null default '',
   role text not null default 'vendedor' check (role in ('admin', 'vendedor')),
   dashboard_widgets jsonb not null default '{}'::jsonb,
+  theme text not null default 'system' check (theme in ('light', 'dark', 'system')),
   created_at timestamptz default now()
 );
 

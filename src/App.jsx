@@ -421,6 +421,9 @@ const GLOBAL_CSS = `
   --brand:#0E6B52; --brand-soft:#E4F0EA; --positive:#2F9E6E; --positive-soft:#E3F5EC;
   --negative:#A8404A; --negative-soft:#FBEAEB; --gold:#C89B3C; --gold-soft:#FBF3E1; --border:#E3E7E1;
   font-family:'Inter', system-ui, -apple-system, sans-serif; color:var(--ink); background:var(--bg); }
+.lomuz-app.lomuz-dark { --bg:#12201B; --surface:#182A22; --surface-2:#1F362B; --ink:#E9F2ED; --ink-soft:#93A69C;
+  --brand:#3DBE8C; --brand-soft:#1E3A2E; --positive:#4CC996; --positive-soft:#1E3A2E;
+  --negative:#E58089; --negative-soft:#3A2024; --gold:#E0B968; --gold-soft:#33290F; --border:#2A3F35; }
 .lomuz-app .lomuz-display { font-family:'Fraunces', Georgia, serif; }
 .lomuz-app * { box-sizing:border-box; }
 .lomuz-app ::-webkit-scrollbar { height:6px; width:6px; }
@@ -1777,7 +1780,7 @@ function CategoriasPage({ data, persist, askConfirm }) {
    NAVEGAÇÃO
    ========================================================================= */
 
-function TopBar({ role, nome, onLogout, onManageUsers, pageTitle }) {
+function TopBar({ role, nome, onLogout, onManageUsers, onTheme, pageTitle }) {
   return (
     <div style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg)', paddingTop: 18, paddingBottom: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '0 16px', gap: 10 }}>
@@ -1789,6 +1792,7 @@ function TopBar({ role, nome, onLogout, onManageUsers, pageTitle }) {
           <div style={{ fontSize: 13, fontWeight: 700, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nome}</div>
           <div style={{ fontSize: 10.5, color: 'var(--ink-soft)', marginTop: 2 }}>{role === 'admin' ? 'Administrador' : 'Vendedor'}</div>
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 4 }}>
+            <button onClick={onTheme} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0 }}>Aparência</button>
             {role === 'admin' && (
               <button onClick={onManageUsers} style={{ background: 'none', border: 'none', color: 'var(--brand)', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0 }}>Usuários</button>
             )}
@@ -1796,6 +1800,21 @@ function TopBar({ role, nome, onLogout, onManageUsers, pageTitle }) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ThemeModal({ value, onChange }) {
+  const options = [
+    { key: 'light', title: 'Claro', desc: 'Fundo claro, sempre.' },
+    { key: 'dark', title: 'Escuro', desc: 'Fundo escuro, sempre.' },
+    { key: 'system', title: 'Automático', desc: 'Segue o ajuste do seu celular ou computador.' },
+  ];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {options.map((o) => (
+        <OptionCard key={o.key} active={value === o.key} title={o.title} desc={o.desc} onClick={() => onChange(o.key)} />
+      ))}
     </div>
   );
 }
@@ -2051,12 +2070,23 @@ export default function App() {
   const [showImportCsv, setShowImportCsv] = useState(false);
   const [showCustomize, setShowCustomize] = useState(false);
   const [showUsers, setShowUsers] = useState(false);
+  const [showTheme, setShowTheme] = useState(false);
   const [editingTx, setEditingTx] = useState(null);
   const [txDraft, setTxDraft] = useState(null);
   const [txStep, setTxStep] = useState('form');
 
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
+  const [themePref, setThemePref] = useState('system');
+  const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches);
+  const isDark = themePref === 'dark' || (themePref === 'system' && systemDark);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const handler = (e) => setSystemDark(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: s } }) => setSession(s));
@@ -2100,9 +2130,16 @@ export default function App() {
       setRole(r);
       setCurrentVendedorId(r === 'vendedor' ? (myVendedor?.id || null) : null);
       setNome(profile?.nome || s.user.email);
+      setThemePref(profile?.theme || 'system');
     } catch (e) {
       console.error('Erro ao carregar dados do Supabase', e);
     }
+  }
+
+  async function handleSetTheme(newTheme) {
+    setThemePref(newTheme);
+    const userId = session?.user?.id;
+    if (userId) await supabase.from('profiles').update({ theme: newTheme }).eq('id', userId);
   }
 
   // Compara o estado novo com o atual e envia ao Supabase só o que mudou
@@ -2280,7 +2317,7 @@ export default function App() {
 
   if (session === undefined) {
     return (
-      <div className="lomuz-app" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div className={`lomuz-app${isDark ? ' lomuz-dark' : ''}`} style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <style>{GLOBAL_CSS}</style>
         <span style={{ fontSize: 14, color: 'var(--ink-soft)' }}>Carregando…</span>
       </div>
@@ -2297,7 +2334,7 @@ export default function App() {
 
   if (!data) {
     return (
-      <div className="lomuz-app" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div className={`lomuz-app${isDark ? ' lomuz-dark' : ''}`} style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <style>{GLOBAL_CSS}</style>
         <span style={{ fontSize: 14, color: 'var(--ink-soft)' }}>Carregando Lomuz Control…</span>
       </div>
@@ -2312,10 +2349,10 @@ export default function App() {
   };
 
   return (
-    <div className="lomuz-app" style={{ minHeight: '100vh', display: 'flex', justifyContent: 'center' }}>
+    <div className={`lomuz-app${isDark ? ' lomuz-dark' : ''}`} style={{ minHeight: '100vh', display: 'flex', justifyContent: 'center' }}>
       <style>{GLOBAL_CSS}</style>
       <div className="lomuz-shell" style={{ width: '100%', minHeight: '100vh', position: 'relative', paddingBottom: 104 }}>
-        <TopBar role={role} nome={nome} onLogout={handleLogout} onManageUsers={() => setShowUsers(true)} pageTitle={pageTitles[page]} />
+        <TopBar role={role} nome={nome} onLogout={handleLogout} onManageUsers={() => setShowUsers(true)} onTheme={() => setShowTheme(true)} pageTitle={pageTitles[page]} />
         <main style={{ padding: '0 16px' }}>
           {page === 'inicio' && (
             <Dashboard data={data} role={role} currentVendedorId={currentVendedorId} period={period} setPeriod={setPeriod} onAddClick={openAddTransaction} onGoTo={setPage} onActivateNow={activateNow} onCustomizeClick={() => setShowCustomize(true)} />
@@ -2355,6 +2392,12 @@ export default function App() {
             {txStep === 'activation' && (
               <ActivationStep draft={txDraft} onBack={() => setTxStep('confirmRecurrence')} onConfirm={handleActivationChoice} />
             )}
+          </Modal>
+        )}
+
+        {showTheme && (
+          <Modal title="Aparência" onClose={() => setShowTheme(false)}>
+            <ThemeModal value={themePref} onChange={handleSetTheme} />
           </Modal>
         )}
 
