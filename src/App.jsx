@@ -7,7 +7,7 @@ import {
   Home, Receipt, TrendingUp, Tag, Plus, X, Calendar, ChevronRight, Repeat, Check,
   ArrowUpCircle, ArrowDownCircle, Users, Trash2, Edit2, Clock, Target, Upload,
   Utensils, Car, Film, HeartPulse, ShoppingBag, Briefcase, GraduationCap, Wallet,
-  Gift, Smartphone, PawPrint, MoreHorizontal, Sparkles
+  Gift, Smartphone, PawPrint, MoreHorizontal, Sparkles, Megaphone, Pin, FileText
 } from 'lucide-react';
 import Papa from 'papaparse';
 import { supabase } from './supabaseClient';
@@ -161,6 +161,26 @@ function rowToPlano(row) {
     recorrente: !!row.recorrente,
     frequencia: row.frequencia || 'mensal',
     ativo: row.ativo !== false,
+  };
+}
+
+function orientacaoToRow(o) {
+  return {
+    id: o.id,
+    titulo: o.titulo,
+    conteudo: o.conteudo || '',
+    anexos: o.anexos || [],
+    fixado: !!o.fixado,
+  };
+}
+function rowToOrientacao(row) {
+  return {
+    id: row.id,
+    titulo: row.titulo,
+    conteudo: row.conteudo || '',
+    anexos: Array.isArray(row.anexos) ? row.anexos : [],
+    fixado: !!row.fixado,
+    createdAt: row.created_at,
   };
 }
 
@@ -365,12 +385,25 @@ function buildVendedorRangeRows(transactions, vendedor, months, categoryIds, pla
 }
 
 // Mesma coisa, somando a equipe inteira mês a mês.
-function buildTeamRangeRows(transactions, vendedores, months, categoryIds, planos) {
+// metasEquipe: mapa { 'YYYY-MM': valor } com a meta da empresa. Quando o mês tem
+// meta própria definida pelo admin, ela vale; senão vale a soma das individuais.
+function buildTeamRangeRows(transactions, vendedores, months, categoryIds, planos, metasEquipe) {
   const perVendedor = vendedores.map((v) => buildVendedorRangeRows(transactions, v, months, categoryIds, planos));
   return months.map((m, i) => {
-    let vendas = 0, meta = 0, comissao = 0;
-    perVendedor.forEach((rows) => { vendas += rows[i].vendas; meta += rows[i].meta; comissao += rows[i].comissao; });
-    return { key: monthKey(m), label: monthLabel(m), vendas: round2(vendas), meta: round2(meta), comissao: round2(comissao) };
+    let vendas = 0, somaMetas = 0, comissao = 0;
+    perVendedor.forEach((rows) => { vendas += rows[i].vendas; somaMetas += rows[i].meta; comissao += rows[i].comissao; });
+    const key = monthKey(m);
+    const metaEmpresa = metasEquipe ? metasEquipe[key] : undefined;
+    const usaMetaEmpresa = metaEmpresa != null;
+    return {
+      key,
+      label: monthLabel(m),
+      vendas: round2(vendas),
+      meta: round2(usaMetaEmpresa ? metaEmpresa : somaMetas),
+      comissao: round2(comissao),
+      usaMetaEmpresa,
+      somaMetas: round2(somaMetas),
+    };
   });
 }
 
@@ -562,11 +595,11 @@ const GLOBAL_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
 .lomuz-app { --bg:#F4F6F2; --surface:#FFFFFF; --surface-2:#EEF1EC; --ink:#13251F; --ink-soft:#5B6B64;
   --brand:#0E6B52; --brand-soft:#E4F0EA; --positive:#2F9E6E; --positive-soft:#E3F5EC;
-  --negative:#A8404A; --negative-soft:#FBEAEB; --gold:#C89B3C; --gold-soft:#FBF3E1; --border:#E3E7E1;
+  --negative:#A8404A; --negative-soft:#FBEAEB; --gold:#C89B3C; --gold-soft:#FBF3E1; --gold-strong:#8A6A1F; --border:#E3E7E1;
   font-family:'Inter', system-ui, -apple-system, sans-serif; color:var(--ink); background:var(--bg); }
 .lomuz-app.lomuz-dark { --bg:#182922; --surface:#20362C; --surface-2:#2A4438; --ink:#EEF4F0; --ink-soft:#9CB0A5;
   --brand:#3DBE8C; --brand-soft:#25422F; --positive:#4CC996; --positive-soft:#25422F;
-  --negative:#E58089; --negative-soft:#432A2A; --gold:#E0B968; --gold-soft:#3D3117; --border:#35493D; }
+  --negative:#E58089; --negative-soft:#432A2A; --gold:#E0B968; --gold-soft:#3D3117; --gold-strong:#E0B968; --border:#35493D; }
 .lomuz-app .lomuz-display { font-family:'Fraunces', Georgia, serif; }
 .lomuz-app * { box-sizing:border-box; }
 .lomuz-app ::-webkit-scrollbar { height:6px; width:6px; }
@@ -923,16 +956,253 @@ function VendedorPanoramaView({ vendedor, rows, isTeam, vendedoresCount, onEditM
               <span>Vendido: {formatCurrency(r.vendas)}</span>
               {onEditMeta ? (
                 <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  Meta: <input type="number" defaultValue={r.meta} onBlur={(e) => onEditMeta(r.key, e.target.value)} style={{ ...inputStyle, padding: '3px 6px', fontSize: 11.5, width: 80 }} />
+                  Meta: <input key={`${r.key}-${r.meta}`} type="number" defaultValue={r.meta} onBlur={(e) => onEditMeta(r.key, e.target.value)} style={{ ...inputStyle, padding: '3px 6px', fontSize: 11.5, width: 80 }} />
                 </span>
               ) : (
                 <span>Meta: {formatCurrency(r.meta)}</span>
               )}
               <span>Comissão: {formatCurrency(r.comissao)}</span>
             </div>
+            {isTeam && (
+              <div style={{ fontSize: 11, color: 'var(--ink-soft)', marginTop: 6, display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                <span>{r.usaMetaEmpresa ? 'Meta da empresa (definida por você)' : 'Somando as metas dos vendedores'}</span>
+                {r.usaMetaEmpresa && r.somaMetas !== r.meta && (
+                  <span>Soma dos vendedores: {formatCurrency(r.somaMetas)}</span>
+                )}
+              </div>
+            )}
           </Card>
         );
       })}
+    </div>
+  );
+}
+
+/* =========================================================================
+   MURAL DE ORIENTAÇÃO (recados do admin + anexos em PDF)
+   ========================================================================= */
+
+// O bucket "documentos" é privado, então o link do PDF é gerado na hora do
+// clique e vale por 1 hora — nada de guardar URL pública no banco.
+async function abrirAnexo(anexo, onError) {
+  const { data, error } = await supabase.storage.from('documentos').createSignedUrl(anexo.path, 3600);
+  if (error || !data?.signedUrl) {
+    onError('Não foi possível abrir o arquivo. Tente de novo em alguns instantes.');
+    return;
+  }
+  window.open(data.signedUrl, '_blank', 'noopener');
+}
+
+function ordenarOrientacoes(list) {
+  return [...(list || [])].sort((a, b) => {
+    if (!!b.fixado !== !!a.fixado) return b.fixado ? 1 : -1;
+    return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+  });
+}
+
+function AnexoLinks({ anexos, onError }) {
+  if (!anexos || anexos.length === 0) return null;
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+      {anexos.map((a) => (
+        <button
+          key={a.path}
+          onClick={() => abrirAnexo(a, onError)}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '6px 10px', fontSize: 12, fontWeight: 600, color: 'var(--brand)', cursor: 'pointer', maxWidth: '100%' }}
+        >
+          <FileText size={13} style={{ flexShrink: 0 }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.nome}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function MuralCard({ orientacoes, role, onEdit }) {
+  const [erro, setErro] = useState('');
+  const lista = ordenarOrientacoes(orientacoes);
+
+  // Vendedor não vê um card vazio; admin vê, com o convite pra escrever o primeiro recado.
+  if (lista.length === 0 && role !== 'admin') return null;
+
+  return (
+    <>
+      <SectionTitle icon={Megaphone} action={role === 'admin' ? { label: 'Editar mural', onClick: onEdit } : null}>
+        Mural de orientação
+      </SectionTitle>
+      {lista.length === 0 ? (
+        <Card>
+          <p style={{ fontSize: 13, color: 'var(--ink-soft)', margin: 0, lineHeight: 1.5 }}>
+            Nenhum recado ainda. Use o mural para passar orientações e materiais (PDF) para a equipe de vendas.
+          </p>
+        </Card>
+      ) : (
+        lista.map((o) => (
+          <Card key={o.id} style={{ marginBottom: 10, borderLeft: o.fixado ? '4px solid var(--gold)' : undefined }}>
+            <div style={{ fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
+              {o.fixado && <Pin size={13} style={{ color: 'var(--gold-strong)', flexShrink: 0 }} />}
+              {o.titulo}
+            </div>
+            {o.conteudo && (
+              <p style={{ fontSize: 13, color: 'var(--ink-soft)', lineHeight: 1.55, margin: '6px 0 0', whiteSpace: 'pre-wrap' }}>{o.conteudo}</p>
+            )}
+            <AnexoLinks anexos={o.anexos} onError={setErro} />
+          </Card>
+        ))
+      )}
+      {erro && <div style={{ color: 'var(--negative)', fontSize: 12.5, fontWeight: 600, marginTop: 8 }}>{erro}</div>}
+    </>
+  );
+}
+
+function MuralAdminModal({ orientacoes, persistOrientacoes, askConfirm }) {
+  const [editando, setEditando] = useState(null); // null = lista, objeto = form
+  const [titulo, setTitulo] = useState('');
+  const [conteudo, setConteudo] = useState('');
+  const [fixado, setFixado] = useState(false);
+  const [anexos, setAnexos] = useState([]);
+  const [erro, setErro] = useState('');
+  const [enviando, setEnviando] = useState(false);
+
+  const lista = ordenarOrientacoes(orientacoes);
+
+  function abrirForm(o) {
+    setEditando(o || { novo: true });
+    setTitulo(o?.titulo || '');
+    setConteudo(o?.conteudo || '');
+    setFixado(!!o?.fixado);
+    setAnexos(o?.anexos || []);
+    setErro('');
+  }
+
+  async function enviarPdf(file) {
+    if (!file) return;
+    if (file.type !== 'application/pdf') { setErro('Só arquivos PDF são aceitos.'); return; }
+    if (file.size > 10 * 1024 * 1024) { setErro('O arquivo passa de 10 MB. Escolha um PDF menor.'); return; }
+    setErro('');
+    setEnviando(true);
+    const path = `orientacoes/${uid()}.pdf`;
+    const { error } = await supabase.storage.from('documentos').upload(path, file, { contentType: 'application/pdf' });
+    setEnviando(false);
+    if (error) { setErro('Não foi possível enviar o PDF. Tente de novo.'); return; }
+    setAnexos((list) => [...list, { nome: file.name, path }]);
+  }
+
+  async function removerAnexo(anexo) {
+    setAnexos((list) => list.filter((a) => a.path !== anexo.path));
+    await supabase.storage.from('documentos').remove([anexo.path]);
+  }
+
+  function salvar() {
+    if (!titulo.trim()) { setErro('Escreva um título para o recado.'); return; }
+    const registro = {
+      id: editando?.novo ? uid() : editando.id,
+      titulo: titulo.trim(),
+      conteudo: conteudo.trim(),
+      anexos,
+      fixado,
+      createdAt: editando?.novo ? new Date().toISOString() : editando.createdAt,
+    };
+    const nova = editando?.novo
+      ? [...(orientacoes || []), registro]
+      : (orientacoes || []).map((o) => (o.id === registro.id ? registro : o));
+    persistOrientacoes(nova);
+    setEditando(null);
+  }
+
+  function remover(o) {
+    askConfirm('Remover este recado do mural? Os PDFs anexados também são apagados.', async () => {
+      persistOrientacoes((orientacoes || []).filter((x) => x.id !== o.id));
+      if (o.anexos?.length) await supabase.storage.from('documentos').remove(o.anexos.map((a) => a.path));
+    });
+  }
+
+  if (editando) {
+    return (
+      <div>
+        <Field label="Título"><input type="text" style={inputStyle} value={titulo} onChange={(e) => setTitulo(e.target.value)} placeholder="Ex.: Campanha de julho" /></Field>
+        <Field label="Orientação">
+          <textarea
+            value={conteudo}
+            onChange={(e) => setConteudo(e.target.value)}
+            rows={5}
+            placeholder="Escreva aqui a orientação para a equipe..."
+            style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }}
+          />
+        </Field>
+
+        <Field label="Anexos em PDF" hint="Até 10 MB por arquivo. Só PDF.">
+          <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, border: '1px dashed var(--border)', borderRadius: 12, padding: 14, cursor: enviando ? 'default' : 'pointer', color: 'var(--brand)', fontSize: 13, fontWeight: 700 }}>
+            <Upload size={15} />
+            {enviando ? 'Enviando...' : 'Escolher PDF'}
+            <input type="file" accept="application/pdf" disabled={enviando} onChange={(e) => { enviarPdf(e.target.files?.[0]); e.target.value = ''; }} style={{ display: 'none' }} />
+          </label>
+        </Field>
+
+        {anexos.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
+            {anexos.map((a) => (
+              <div key={a.path} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, background: 'var(--surface-2)', borderRadius: 10, padding: '8px 10px' }}>
+                <span style={{ fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                  <FileText size={13} style={{ flexShrink: 0 }} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.nome}</span>
+                </span>
+                <button onClick={() => removerAnexo(a)} style={{ ...iconBtnStyle, flexShrink: 0 }}><X size={14} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderTop: '1px solid var(--border)' }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>Fixar no topo</div>
+            <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>Recados fixados aparecem primeiro</div>
+          </div>
+          <Toggle checked={fixado} onChange={setFixado} />
+        </div>
+
+        {erro && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{erro}</div>}
+        <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+          <Button variant="secondary" onClick={() => setEditando(null)} style={{ flex: 1 }}>Voltar</Button>
+          <Button variant="primary" onClick={salvar} style={{ flex: 2 }} disabled={enviando}>Salvar recado</Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 14, lineHeight: 1.5 }}>
+        Os recados aparecem na tela de Início de todos os vendedores, com os PDFs anexados.
+      </p>
+      {lista.length === 0 ? (
+        <EmptyState icon={Megaphone} title="Mural vazio" desc="Escreva o primeiro recado para a equipe." actionLabel="+ Novo recado" onAction={() => abrirForm(null)} />
+      ) : (
+        <>
+          <Card style={{ padding: 0 }}>
+            {lista.map((o, i) => (
+              <div key={o.id} style={{ padding: 14, borderBottom: i === lista.length - 1 ? 'none' : '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', gap: 5 }}>
+                    {o.fixado && <Pin size={12} style={{ color: 'var(--gold-strong)', flexShrink: 0 }} />}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.titulo}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>
+                    {o.anexos?.length ? `${o.anexos.length} anexo(s)` : 'sem anexo'}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                  <button onClick={() => abrirForm(o)} style={iconBtnStyle}><Edit2 size={15} /></button>
+                  <button onClick={() => remover(o)} style={iconBtnStyle}><Trash2 size={15} /></button>
+                </div>
+              </div>
+            ))}
+          </Card>
+          <Button variant="primary" onClick={() => abrirForm(null)} style={{ width: '100%', marginTop: 14 }}>
+            <Plus size={16} /> Novo recado
+          </Button>
+        </>
+      )}
     </div>
   );
 }
@@ -1390,7 +1660,7 @@ function DashboardCustomizeModal({ widgets, onToggle, onClose }) {
   );
 }
 
-function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClick, onGoTo, onActivateNow, onCustomizeClick, onReviewSale }) {
+function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClick, onGoTo, onActivateNow, onCustomizeClick, onReviewSale, onEditMural }) {
   const txs = scopedTransactions(data, role, currentVendedorId);
   const range = getPeriodRange(period);
   const despesas = sumByPeriod(txs, 'despesa', range.start, range.end);
@@ -1490,6 +1760,8 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
           </div>
         </Card>
       )}
+
+      <MuralCard orientacoes={data.orientacoes} role={role} onEdit={onEditMural} />
 
       {txs.length === 0 ? (
         <EmptyState icon={Receipt} title="Comece por aqui" desc="Registre sua primeira receita ou despesa para ver seu saldo e gráficos." actionLabel="+ Novo lançamento" onAction={onAddClick} />
@@ -1909,6 +2181,8 @@ function EquipeForecast({ data, persist, askConfirm }) {
   const [selectedCats, setSelectedCats] = useState([]);
   const [selectedId, setSelectedId] = useState('equipe');
   const [inviteStatus, setInviteStatus] = useState('');
+  const [showMetaTodos, setShowMetaTodos] = useState(false);
+  const [metaTodosValor, setMetaTodosValor] = useState('');
 
   const months = useMemo(() => computeMonthsForRange(rangeMode, customFrom, customTo), [rangeMode, customFrom, customTo]);
   const receitaCats = data.categories.filter((c) => c.tipo === 'receita');
@@ -1948,6 +2222,26 @@ function EquipeForecast({ data, persist, askConfirm }) {
     const metas = { ...(v.metas || {}), [monthKeyStr]: Number(value) || 0 };
     persist({ ...data, vendedores: data.vendedores.map((x) => (x.id === vendedorId ? { ...x, metas } : x)) });
   }
+  // Meta da empresa para um mês. Valor 0/vazio remove a meta própria e volta a
+  // valer a soma das metas individuais.
+  function updateMetaEquipe(monthKeyStr, value) {
+    const num = Number(value) || 0;
+    const atual = { ...(data.metasEquipe || {}) };
+    if (num > 0) atual[monthKeyStr] = num;
+    else delete atual[monthKeyStr];
+    persist({ ...data, metasEquipe: atual });
+  }
+  // Aplica a mesma meta em todos os vendedores, nos meses que estão em tela.
+  function aplicarMetaEmTodos(value) {
+    const num = Number(value) || 0;
+    const chaves = months.map((m) => monthKey(m));
+    const vendedores = data.vendedores.map((v) => {
+      const metas = { ...(v.metas || {}) };
+      chaves.forEach((k) => { metas[k] = num; });
+      return { ...v, metas };
+    });
+    persist({ ...data, vendedores });
+  }
 
   const selectedVendedor = selectedId !== 'equipe' ? data.vendedores.find((v) => v.id === selectedId) : null;
 
@@ -1984,7 +2278,22 @@ function EquipeForecast({ data, persist, askConfirm }) {
           )}
 
           {selectedId === 'equipe' ? (
-            <VendedorPanoramaView isTeam vendedoresCount={data.vendedores.length} rows={buildTeamRangeRows(data.transactions, data.vendedores, months, selectedCats, data.planos)} />
+            <>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+                <button
+                  onClick={() => { setMetaTodosValor(''); setShowMetaTodos(true); }}
+                  style={{ background: 'none', border: 'none', color: 'var(--brand)', fontWeight: 700, fontSize: 12, cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
+                >
+                  Definir meta para todos
+                </button>
+              </div>
+              <VendedorPanoramaView
+                isTeam
+                vendedoresCount={data.vendedores.length}
+                rows={buildTeamRangeRows(data.transactions, data.vendedores, months, selectedCats, data.planos, data.metasEquipe)}
+                onEditMeta={updateMetaEquipe}
+              />
+            </>
           ) : !selectedVendedor ? null : (
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8 }}>
@@ -2009,6 +2318,29 @@ function EquipeForecast({ data, persist, askConfirm }) {
       {showForm && (
         <Modal title={editing ? 'Editar vendedor' : 'Novo vendedor'} onClose={() => { setShowForm(false); setEditing(null); }}>
           <VendedorForm vendedor={editing} onSubmit={saveVendedor} onCancel={() => { setShowForm(false); setEditing(null); }} />
+        </Modal>
+      )}
+
+      {showMetaTodos && (
+        <Modal title="Definir meta para todos" onClose={() => setShowMetaTodos(false)}>
+          <p style={{ fontSize: 13, color: 'var(--ink-soft)', marginTop: 0, marginBottom: 14, lineHeight: 1.5 }}>
+            Esse valor vira a meta de <strong>cada</strong> vendedor nos {months.length} mês(es) que estão em tela
+            ({months.length > 0 ? `${monthLabel(months[0])} a ${monthLabel(months[months.length - 1])}` : '—'}).
+            Depois você ainda pode ajustar cada pessoa individualmente.
+          </p>
+          <Field label="Meta mensal por vendedor">
+            <input type="number" min="0" style={inputStyle} value={metaTodosValor} onChange={(e) => setMetaTodosValor(e.target.value)} placeholder="Ex.: 15000" />
+          </Field>
+          <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+            <Button variant="secondary" onClick={() => setShowMetaTodos(false)} style={{ flex: 1 }}>Cancelar</Button>
+            <Button
+              variant="primary"
+              onClick={() => { aplicarMetaEmTodos(metaTodosValor); setShowMetaTodos(false); }}
+              style={{ flex: 2 }}
+            >
+              Aplicar a {data.vendedores.length} vendedor(es)
+            </Button>
+          </div>
         </Modal>
       )}
     </div>
@@ -2300,7 +2632,7 @@ function CategoriasPage({ data, persist, askConfirm }) {
    NAVEGAÇÃO
    ========================================================================= */
 
-function TopBar({ role, nome, onLogout, onManageUsers, onTheme, pageTitle }) {
+function TopBar({ role, nome, onLogout, onManageUsers, onTheme, onMural, pageTitle }) {
   return (
     <div style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg)', paddingTop: 18, paddingBottom: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '0 16px', gap: 10 }}>
@@ -2313,6 +2645,9 @@ function TopBar({ role, nome, onLogout, onManageUsers, onTheme, pageTitle }) {
           <div style={{ fontSize: 10.5, color: 'var(--ink-soft)', marginTop: 2 }}>{role === 'admin' ? 'Administrador' : 'Vendedor'}</div>
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 4 }}>
             <button onClick={onTheme} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0 }}>Aparência</button>
+            {role === 'admin' && (
+              <button onClick={onMural} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0 }}>Mural</button>
+            )}
             {role === 'admin' && (
               <button onClick={onManageUsers} style={{ background: 'none', border: 'none', color: 'var(--brand)', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0 }}>Usuários</button>
             )}
@@ -2591,6 +2926,7 @@ export default function App() {
   const [showCustomize, setShowCustomize] = useState(false);
   const [showUsers, setShowUsers] = useState(false);
   const [showTheme, setShowTheme] = useState(false);
+  const [showMural, setShowMural] = useState(false);
   const [editingTx, setEditingTx] = useState(null);
   const [txDraft, setTxDraft] = useState(null);
   const [txStep, setTxStep] = useState('form');
@@ -2627,13 +2963,17 @@ export default function App() {
   async function loadData(s) {
     const userId = s.user.id;
     try {
-      const [profileRes, catRes, vendRes, txRes, planoRes] = await Promise.all([
+      const [profileRes, catRes, vendRes, txRes, planoRes, orientRes, metaEqRes] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', userId).single(),
         supabase.from('categories').select('*').order('nome'),
         supabase.from('vendedores').select('*'),
         supabase.from('transactions').select('*'),
         supabase.from('planos').select('*').order('nome'),
+        supabase.from('orientacoes').select('*'),
+        supabase.from('metas_equipe').select('*'),
       ]);
+      const metasEquipe = {};
+      (metaEqRes.data || []).forEach((r) => { metasEquipe[r.mes] = Number(r.valor) || 0; });
       const profile = profileRes.data;
       const vendedores = (vendRes.data || []).map(rowToVendedor);
       const r = profile?.role || 'vendedor';
@@ -2643,6 +2983,8 @@ export default function App() {
         transactions: (txRes.data || []).map(rowToTx),
         vendedores,
         planos: (planoRes.data || []).map(rowToPlano),
+        orientacoes: (orientRes.data || []).map(rowToOrientacao),
+        metasEquipe,
         uiPrefs: {
           dashboardWidgets: (profile?.dashboard_widgets && Object.keys(profile.dashboard_widgets).length)
             ? profile.dashboard_widgets
@@ -2708,6 +3050,28 @@ export default function App() {
       }
       for (const p of prevPlanos) {
         if (!newPlanos.find((x) => x.id === p.id)) await supabase.from('planos').delete().eq('id', p.id);
+      }
+
+      // mural de orientação
+      const prevOrients = prev?.orientacoes || [];
+      const newOrients = newData.orientacoes || [];
+      for (const o of newOrients) {
+        const before = prevOrients.find((x) => x.id === o.id);
+        if (!before) await supabase.from('orientacoes').insert(orientacaoToRow(o));
+        else if (JSON.stringify(before) !== JSON.stringify(o)) await supabase.from('orientacoes').update(orientacaoToRow(o)).eq('id', o.id);
+      }
+      for (const o of prevOrients) {
+        if (!newOrients.find((x) => x.id === o.id)) await supabase.from('orientacoes').delete().eq('id', o.id);
+      }
+
+      // meta da empresa por mês (upsert quando tem valor, remove quando zera)
+      const prevMetaEq = prev?.metasEquipe || {};
+      const newMetaEq = newData.metasEquipe || {};
+      for (const [mes, valor] of Object.entries(newMetaEq)) {
+        if (prevMetaEq[mes] !== valor) await supabase.from('metas_equipe').upsert({ mes, valor });
+      }
+      for (const mes of Object.keys(prevMetaEq)) {
+        if (!(mes in newMetaEq)) await supabase.from('metas_equipe').delete().eq('mes', mes);
       }
 
       // lançamentos
@@ -2912,10 +3276,10 @@ export default function App() {
     <div className={`lomuz-app${isDark ? ' lomuz-dark' : ''}`} style={{ minHeight: '100vh', display: 'flex', justifyContent: 'center' }}>
       <style>{GLOBAL_CSS}</style>
       <div className="lomuz-shell" style={{ width: '100%', minHeight: '100vh', position: 'relative', paddingBottom: 104 }}>
-        <TopBar role={role} nome={nome} onLogout={handleLogout} onManageUsers={() => setShowUsers(true)} onTheme={() => setShowTheme(true)} pageTitle={pageTitles[page]} />
+        <TopBar role={role} nome={nome} onLogout={handleLogout} onManageUsers={() => setShowUsers(true)} onTheme={() => setShowTheme(true)} onMural={() => setShowMural(true)} pageTitle={pageTitles[page]} />
         <main style={{ padding: '0 16px' }}>
           {page === 'inicio' && (
-            <Dashboard data={data} role={role} currentVendedorId={currentVendedorId} period={period} setPeriod={setPeriod} onAddClick={openAddTransaction} onGoTo={setPage} onActivateNow={activateNow} onCustomizeClick={() => setShowCustomize(true)} onReviewSale={openEditTransaction} />
+            <Dashboard data={data} role={role} currentVendedorId={currentVendedorId} period={period} setPeriod={setPeriod} onAddClick={openAddTransaction} onGoTo={setPage} onActivateNow={activateNow} onCustomizeClick={() => setShowCustomize(true)} onReviewSale={openEditTransaction} onEditMural={() => setShowMural(true)} />
           )}
           {page === 'lancamentos' && (
             <LancamentosPage data={data} role={role} currentVendedorId={currentVendedorId} onEdit={openEditTransaction} onImportClick={() => setShowImportCsv(true)} />
@@ -2966,6 +3330,16 @@ export default function App() {
         {showTheme && (
           <Modal title="Aparência" onClose={() => setShowTheme(false)}>
             <ThemeModal value={themePref} onChange={handleSetTheme} />
+          </Modal>
+        )}
+
+        {showMural && (
+          <Modal title="Mural de orientação" onClose={() => setShowMural(false)}>
+            <MuralAdminModal
+              orientacoes={data.orientacoes}
+              persistOrientacoes={(nova) => persist({ ...data, orientacoes: nova })}
+              askConfirm={askConfirm}
+            />
           </Modal>
         )}
 

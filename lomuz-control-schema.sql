@@ -55,6 +55,26 @@ create table planos (
   created_at timestamptz default now()
 );
 
+-- Mural de orientação: recados que o admin escreve e todo vendedor lê.
+-- "anexos" guarda uma lista [{ nome, path }] apontando para PDFs no bucket
+-- "documentos" do Storage (o link é gerado na hora, não fica salvo aqui).
+create table orientacoes (
+  id text primary key,
+  titulo text not null,
+  conteudo text not null default '',
+  anexos jsonb not null default '[]'::jsonb,
+  fixado boolean not null default false,
+  created_at timestamptz default now()
+);
+
+-- Meta da empresa por mês (formato 'YYYY-MM'), definida pelo admin. Quando
+-- existe meta para o mês, ela vale no painel da equipe; quando não existe,
+-- vale a soma das metas individuais dos vendedores.
+create table metas_equipe (
+  mes text primary key,
+  valor numeric not null default 0
+);
+
 -- Lançamentos (receitas e despesas)
 create table transactions (
   id text primary key,
@@ -112,6 +132,8 @@ alter table profiles enable row level security;
 alter table vendedores enable row level security;
 alter table categories enable row level security;
 alter table planos enable row level security;
+alter table orientacoes enable row level security;
+alter table metas_equipe enable row level security;
 alter table transactions enable row level security;
 
 -- Função auxiliar pra checar "é admin?" sem causar recursão de RLS.
@@ -157,6 +179,33 @@ create policy "Só admin edita planos" on planos
   for update using (public.is_admin());
 create policy "Só admin apaga planos" on planos
   for delete using (public.is_admin());
+
+create policy "Todo mundo logado vê orientações" on orientacoes
+  for select using (auth.uid() is not null);
+create policy "Só admin cria orientações" on orientacoes
+  for insert with check (public.is_admin());
+create policy "Só admin edita orientações" on orientacoes
+  for update using (public.is_admin());
+create policy "Só admin apaga orientações" on orientacoes
+  for delete using (public.is_admin());
+
+create policy "Todo mundo logado vê meta da equipe" on metas_equipe
+  for select using (auth.uid() is not null);
+create policy "Só admin define meta da equipe" on metas_equipe
+  for all using (public.is_admin());
+
+-- Bucket privado para os PDFs do mural. Leitura para qualquer pessoa logada,
+-- envio e remoção só para admin. Só aceita PDF, até 10 MB.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+  values ('documentos', 'documentos', false, 10485760, array['application/pdf'])
+  on conflict (id) do nothing;
+
+create policy "Logado lê documentos" on storage.objects
+  for select using (bucket_id = 'documentos' and auth.uid() is not null);
+create policy "Admin envia documentos" on storage.objects
+  for insert with check (bucket_id = 'documentos' and public.is_admin());
+create policy "Admin apaga documentos" on storage.objects
+  for delete using (bucket_id = 'documentos' and public.is_admin());
 
 create policy "Admin vê tudo, vendedor vê só o próprio" on transactions
   for select using (
