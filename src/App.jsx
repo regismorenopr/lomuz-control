@@ -143,6 +143,7 @@ function rowToTx(row) {
     formaPagamento: row.forma_pagamento || '',
     planoId: row.plano_id || null,
     comissaoPercentual: row.comissao_percentual != null ? Number(row.comissao_percentual) : null,
+    dataEstimada: !!row.data_estimada,
   };
 }
 function planoToRow(p) {
@@ -614,13 +615,17 @@ function buildMotivationalMessage(rows, nome) {
 // lançamentos recorrentes/futuros já cadastrados via expandOccurrences).
 function buildCompanyEvolution(transactions, monthsBack, monthsForward = 0) {
   const today = new Date();
+  // Vendas antigas importadas sem data real (data_estimada) não entram na
+  // evolução mês a mês pra não empilhar um pico artificial num único mês —
+  // mas continuam contando nos totais gerais/acumulados, que não dependem de mês.
+  const txsComDataConfiavel = transactions.filter((t) => !t.dataEstimada);
   const rows = [];
   for (let i = -(monthsBack - 1); i <= monthsForward; i += 1) {
     const m = addMonths(startOfMonth(today), i);
     const rs = startOfMonth(m);
     const re = endOfMonth(m);
-    const receita = sumByPeriod(transactions, 'receita', rs, re).total;
-    const despesa = sumByPeriod(transactions, 'despesa', rs, re).total;
+    const receita = sumByPeriod(txsComDataConfiavel, 'receita', rs, re).total;
+    const despesa = sumByPeriod(txsComDataConfiavel, 'despesa', rs, re).total;
     rows.push({ key: monthKey(m), label: monthLabel(m), receita, despesa, saldo: round2(receita - despesa) });
   }
   return rows;
@@ -883,6 +888,7 @@ function TransactionRow({ tx, category, last, onClick }) {
         <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tx.descricao || category?.nome || 'Sem categoria'}</div>
         <div style={{ fontSize: 12, color: 'var(--ink-soft)', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <span>{formatDateBR(tx.data)}</span>
+          {tx.dataEstimada && <span title="Venda antiga importada sem data exata registrada — usamos uma data aproximada." style={{ color: 'var(--warning-strong)', fontWeight: 700 }}>· data aproximada</span>}
           {tx.recorrente && <Repeat size={11} />}
           {status === 'pendente' && <span style={{ color: 'var(--warning-strong)', fontWeight: 700 }}>· Pendente</span>}
           {status === 'cancelado' && <span style={{ color: 'var(--negative)', fontWeight: 700 }}>· Cancelado</span>}
@@ -2272,7 +2278,11 @@ function LancamentosPage({ data, role, currentVendedorId, onEdit, onImportClick 
   if (filterCat !== 'todas') list = list.filter((t) => t.categoriaId === filterCat);
   if (filterPeriodo !== 'todos') {
     const r = getPeriodRange({ type: filterPeriodo });
+    // Vendas antigas com data_estimada (importação sem data real) só aparecem
+    // em "Todo o período" — filtrar por mês/ano específico com uma data que
+    // não é real daria um resultado enganoso.
     list = list.filter((t) => {
+      if (t.dataEstimada) return false;
       const d = parseISODate(t.data);
       return d >= r.start && d <= r.end;
     });

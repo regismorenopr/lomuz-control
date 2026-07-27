@@ -166,6 +166,12 @@ create table transactions (
   -- do vendedor. O vendedor não pode escrever comissao_percentual (ver trigger).
   plano_id text references planos(id) on delete set null,
   comissao_percentual numeric,
+  -- Marca vendas antigas importadas em lote cuja data real não foi
+  -- preservada na origem (ex.: contratos recorrentes legados, todos
+  -- carimbados com a mesma data genérica). Usada pra excluir essas linhas
+  -- da evolução mês a mês (evitaria um pico artificial num único mês),
+  -- mantendo-as nos totais gerais/acumulados.
+  data_estimada boolean not null default false,
   created_at timestamptz default now()
 );
 
