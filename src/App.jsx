@@ -421,9 +421,9 @@ const GLOBAL_CSS = `
   --brand:#0E6B52; --brand-soft:#E4F0EA; --positive:#2F9E6E; --positive-soft:#E3F5EC;
   --negative:#A8404A; --negative-soft:#FBEAEB; --gold:#C89B3C; --gold-soft:#FBF3E1; --border:#E3E7E1;
   font-family:'Inter', system-ui, -apple-system, sans-serif; color:var(--ink); background:var(--bg); }
-.lomuz-app.lomuz-dark { --bg:#12201B; --surface:#182A22; --surface-2:#1F362B; --ink:#E9F2ED; --ink-soft:#93A69C;
-  --brand:#3DBE8C; --brand-soft:#1E3A2E; --positive:#4CC996; --positive-soft:#1E3A2E;
-  --negative:#E58089; --negative-soft:#3A2024; --gold:#E0B968; --gold-soft:#33290F; --border:#2A3F35; }
+.lomuz-app.lomuz-dark { --bg:#182922; --surface:#20362C; --surface-2:#2A4438; --ink:#EEF4F0; --ink-soft:#9CB0A5;
+  --brand:#3DBE8C; --brand-soft:#25422F; --positive:#4CC996; --positive-soft:#25422F;
+  --negative:#E58089; --negative-soft:#432A2A; --gold:#E0B968; --gold-soft:#3D3117; --border:#35493D; }
 .lomuz-app .lomuz-display { font-family:'Fraunces', Georgia, serif; }
 .lomuz-app * { box-sizing:border-box; }
 .lomuz-app ::-webkit-scrollbar { height:6px; width:6px; }
@@ -1085,7 +1085,7 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
     <div style={{ paddingTop: 12 }}>
       <PeriodSelector value={period} onChange={setPeriod} />
 
-      <Card style={{ marginTop: 14, background: 'var(--ink)', color: '#fff', border: 'none' }}>
+      <Card style={{ marginTop: 14, background: '#13251F', color: '#fff', border: 'none' }}>
         <div style={{ fontSize: 11.5, opacity: 0.7, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4 }}>Saldo do período</div>
         <div className="lomuz-display" style={{ fontSize: 34, margin: '6px 0 14px', color: saldo >= 0 ? '#8FE3B8' : '#F3A6AC' }}>
           {formatCurrency(saldo)}
@@ -1103,7 +1103,7 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
       </Card>
 
       {pendentes.length > 0 && (
-        <Card style={{ marginTop: 14, borderColor: 'var(--gold)', background: 'var(--gold-soft)' }}>
+        <Card style={{ marginTop: 14, borderColor: '#C89B3C', background: '#FBF3E1' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, color: '#8A6A1F' }}>
             <Clock size={16} /> {pendentes.length} lançamento(s) aguardando ativação
           </div>
@@ -1642,7 +1642,7 @@ function VendedorForecast({ data, vendedorId, monthsCount, periodMode, setPeriod
   return (
     <div>
       <MonthsPeriodSelector mode={periodMode} setMode={setPeriodMode} custom={customMonths} setCustom={setCustomMonths} />
-      <Card style={{ background: 'var(--ink)', color: '#fff', border: 'none', marginBottom: 16 }}>
+      <Card style={{ background: '#13251F', color: '#fff', border: 'none', marginBottom: 16 }}>
         <div style={{ fontSize: 11.5, opacity: 0.7, textTransform: 'uppercase', fontWeight: 700 }}>{v.nome} · comissão {v.comissaoPercentual}%</div>
         <div style={{ display: 'flex', gap: 24, marginTop: 10 }}>
           <div>
@@ -1892,10 +1892,10 @@ function BottomNav({ page, setPage, onAdd, role }) {
 
   return (
     <div className="lomuz-shell" style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%' }}>
-      <div style={{ position: 'relative', display: 'flex', justifyContent: 'space-around', alignItems: 'center', background: 'var(--surface)', borderTop: '1px solid var(--border)', padding: '8px 4px 10px' }}>
-        {left.map(renderItem)}
+      <div style={{ position: 'relative', display: 'flex', alignItems: 'center', background: 'var(--surface)', borderTop: '1px solid var(--border)', padding: '8px 4px 10px' }}>
+        <div style={{ flex: 1, display: 'flex', justifyContent: 'space-around' }}>{left.map(renderItem)}</div>
         <div style={{ width: 58, flexShrink: 0 }} />
-        {right.map(renderItem)}
+        <div style={{ flex: 1, display: 'flex', justifyContent: 'space-around' }}>{right.map(renderItem)}</div>
         <button
           onClick={onAdd}
           aria-label="Novo lançamento"

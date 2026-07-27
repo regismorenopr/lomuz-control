@@ -85,51 +85,59 @@ alter table vendedores enable row level security;
 alter table categories enable row level security;
 alter table transactions enable row level security;
 
+-- Função auxiliar pra checar "é admin?" sem causar recursão de RLS.
+-- IMPORTANTE: nunca faça "exists (select 1 from profiles ...)" direto dentro
+-- de uma policy da própria tabela profiles — o Postgres detecta isso como
+-- recursão infinita e a consulta falha com erro 500 (foi exatamente o bug
+-- que quebrou o app em produção: todo mundo aparecia como "vendedor" porque
+-- a consulta ao próprio perfil sempre falhava). Use sempre public.is_admin().
+create or replace function public.is_admin()
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (select 1 from profiles where id = auth.uid() and role = 'admin');
+$$;
+
 create policy "Ver o próprio perfil, ou tudo se for admin" on profiles
-  for select using (
-    id = auth.uid()
-    or exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'admin')
-  );
+  for select using (id = auth.uid() or public.is_admin());
 create policy "Atualizar o próprio perfil" on profiles
   for update using (id = auth.uid());
 create policy "Admin atualiza qualquer perfil" on profiles
-  for update using (
-    exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'admin')
-  );
+  for update using (public.is_admin());
 
 create policy "Admin gerencia vendedores, vendedor vê o próprio" on vendedores
-  for all using (
-    exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'admin')
-    or profile_id = auth.uid()
-  );
+  for all using (public.is_admin() or profile_id = auth.uid());
 
 create policy "Todo mundo logado vê categorias" on categories
   for select using (auth.uid() is not null);
 create policy "Só admin cria categorias" on categories
-  for insert with check (exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'admin'));
+  for insert with check (public.is_admin());
 create policy "Só admin edita categorias" on categories
-  for update using (exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'admin'));
+  for update using (public.is_admin());
 create policy "Só admin apaga categorias" on categories
-  for delete using (exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'admin'));
+  for delete using (public.is_admin());
 
 create policy "Admin vê tudo, vendedor vê só o próprio" on transactions
   for select using (
-    exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'admin')
+    public.is_admin()
     or vendedor_id in (select id from vendedores where profile_id = auth.uid())
   );
 create policy "Admin insere qualquer, vendedor insere só o próprio" on transactions
   for insert with check (
-    exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'admin')
+    public.is_admin()
     or vendedor_id in (select id from vendedores where profile_id = auth.uid())
   );
 create policy "Admin edita tudo, vendedor edita só o próprio" on transactions
   for update using (
-    exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'admin')
+    public.is_admin()
     or vendedor_id in (select id from vendedores where profile_id = auth.uid())
   );
 create policy "Admin apaga tudo, vendedor apaga só o próprio" on transactions
   for delete using (
-    exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'admin')
+    public.is_admin()
     or vendedor_id in (select id from vendedores where profile_id = auth.uid())
   );
 
