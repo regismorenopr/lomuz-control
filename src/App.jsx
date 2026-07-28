@@ -20,6 +20,25 @@ import {
 } from './components/dashboard.jsx';
 import { CurrencyInput } from './components/CurrencyInput.jsx';
 
+// O Supabase (PostgREST) só devolve até 1000 linhas por chamada, mesmo sem
+// limite explícito no .select(). Tabelas pequenas nunca notam, mas
+// "transactions" já passou disso — sem paginar aqui, uma fatia dos
+// lançamentos simplesmente some da tela sem nenhum erro. Busca em páginas de
+// 1000 até a última vir incompleta.
+async function fetchAllRows(table, { order = 'id' } = {}) {
+  const pageSize = 1000;
+  let from = 0;
+  let all = [];
+  for (;;) {
+    const { data, error } = await supabase.from(table).select('*').order(order).range(from, from + pageSize - 1);
+    if (error) throw error;
+    all = all.concat(data || []);
+    if (!data || data.length < pageSize) break;
+    from += pageSize;
+  }
+  return { data: all };
+}
+
 /* =========================================================================
    UTILITÁRIOS DE DATA E FORMATAÇÃO
    ========================================================================= */
@@ -4170,14 +4189,14 @@ export default function App() {
         supabase.from('profiles').select('*').eq('id', userId).single(),
         supabase.from('categories').select('*').order('nome'),
         supabase.from('vendedores').select('*'),
-        supabase.from('transactions').select('*'),
+        fetchAllRows('transactions'),
         supabase.from('planos').select('*').order('nome'),
         supabase.from('orientacoes').select('*'),
         supabase.from('metas_equipe').select('*'),
         supabase.from('servicos').select('*').order('nome'),
         supabase.from('ramos_negocio').select('*').order('nome'),
         supabase.from('indices_reajuste').select('*').order('nome'),
-        supabase.from('clientes').select('*').order('nome_fantasia'),
+        fetchAllRows('clientes', { order: 'nome_fantasia' }),
         supabase.from('cliente_planos').select('*'),
         // Visões seguras: usadas pro ranking de vendas entre vendedores (nome,
         // comissão e vendas só de quem está ativo — nunca dados de admin).
