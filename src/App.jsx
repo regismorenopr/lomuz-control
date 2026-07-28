@@ -2053,6 +2053,10 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
   const pendentes = txs.filter((t) => t.recorrente && getRecurrenceStatus(t) === 'pendente');
   // Vendas lançadas por vendedores esperando o admin revisar e aprovar.
   const aguardandoRevisao = role === 'admin' ? data.transactions.filter((t) => t.status === 'pendente') : [];
+  // Tudo que exige uma ação vai junto num bloco no topo, separado dos números
+  // informativos — antes ficava espalhado com uma grade de cartões no meio.
+  const temContasEmAlerta = somaPagarHoje > 0 || somaPagarAtraso > 0 || somaReceberAtraso > 0;
+  const temAtencao = aguardandoRevisao.length > 0 || pendentes.length > 0 || temContasEmAlerta;
   const widgets = { ...DEFAULT_DASHBOARD_WIDGETS, ...(data.uiPrefs?.dashboardWidgets || {}) };
 
   const pieData = Object.entries(despesas.byCategory)
@@ -2089,29 +2093,87 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
 
   return (
     <div style={{ paddingTop: 12 }}>
-      {aguardandoRevisao.length > 0 && (
-        <Card style={{ marginBottom: 14, borderColor: 'var(--warning)', background: 'var(--warning-light)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, color: 'var(--warning-strong)' }}>
-            <Clock size={16} /> {aguardandoRevisao.length} venda(s) aguardando sua revisão
-          </div>
-          <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {aguardandoRevisao.slice(0, 5).map((t) => {
-              const vend = data.vendedores.find((v) => v.id === t.vendedorId);
-              return (
-                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-body)', color: 'var(--warning-strong)', gap: 8 }}>
-                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {vend?.nome || 'Vendedor'} · {t.clienteNome || 'sem cliente'} · {formatCurrency(t.valor)}
-                  </span>
-                  <button onClick={() => onReviewSale(t)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 'var(--fs-small)', cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
-                    Revisar
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
+      {temAtencao && (
+        <div style={{ marginBottom: 20 }}>
+          <SectionTitle icon={Clock}>Precisa da sua atenção</SectionTitle>
+
+          {aguardandoRevisao.length > 0 && (
+            <Card style={{ marginBottom: 10, borderColor: 'var(--warning)', background: 'var(--warning-light)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, color: 'var(--warning-strong)' }}>
+                <Clock size={16} /> {aguardandoRevisao.length} venda(s) aguardando sua revisão
+              </div>
+              <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {aguardandoRevisao.slice(0, 5).map((t) => {
+                  const vend = data.vendedores.find((v) => v.id === t.vendedorId);
+                  return (
+                    <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-body)', color: 'var(--warning-strong)', gap: 8 }}>
+                      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {vend?.nome || 'Vendedor'} · {t.clienteNome || 'sem cliente'} · {formatCurrency(t.valor)}
+                      </span>
+                      <button onClick={() => onReviewSale(t)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 'var(--fs-small)', cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
+                        Revisar
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
+
+          {pendentes.length > 0 && (
+            <Card style={{ marginBottom: 10, borderColor: 'var(--warning)', background: 'var(--warning-light)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, color: 'var(--warning-strong)' }}>
+                <Clock size={16} /> {pendentes.length} lançamento(s) aguardando ativação
+              </div>
+              <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {pendentes.slice(0, 4).map((t) => {
+                  const c = data.categories.find((cc) => cc.id === t.categoriaId);
+                  return (
+                    <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-body)', color: 'var(--warning-strong)', gap: 8 }}>
+                      <span>{c?.nome} · {formatCurrency(t.valor)} · ativa em {daysUntil(t.dataAtivacao)} dia(s)</span>
+                      {/* Só admin ativa antes do prazo — muitos produtos têm período de
+                          teste e o vendedor não deve poder pular essa validação. */}
+                      {role === 'admin' && (
+                        <button onClick={() => onActivateNow(t)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 'var(--fs-small)', cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
+                          Ativar agora
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
+
+          {temContasEmAlerta && (
+            <div className="lomuz-kpi-grid">
+              <StatCard
+                title="Vence hoje (a pagar)"
+                value={formatCurrency(somaPagarHoje)}
+                icon={Clock}
+                tone={somaPagarHoje > 0 ? 'warning' : 'neutral'}
+                footer={`${pagarHoje.length} conta(s)`}
+              />
+              <StatCard
+                title="Em atraso — a pagar"
+                value={formatCurrency(somaPagarAtraso)}
+                icon={ArrowDownCircle}
+                tone={somaPagarAtraso > 0 ? 'danger' : 'neutral'}
+                footer={`${pagarAtraso.length} conta(s)`}
+              />
+              <StatCard
+                title="Em atraso — a receber"
+                value={formatCurrency(somaReceberAtraso)}
+                icon={ArrowUpCircle}
+                tone={somaReceberAtraso > 0 ? 'danger' : 'neutral'}
+                footer={`${receberAtraso.length} conta(s)`}
+              />
+            </div>
+          )}
+        </div>
       )}
 
+      <SectionTitle icon={TrendingUp}>Resumo do período</SectionTitle>
       <PeriodSelector value={period} onChange={setPeriod} />
 
       <div className="lomuz-kpi-grid" style={{ marginTop: 14 }}>
@@ -2170,57 +2232,7 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
         />
       </div>
 
-      {(somaPagarHoje > 0 || somaPagarAtraso > 0 || somaReceberAtraso > 0) && (
-        <div className="lomuz-kpi-grid" style={{ marginTop: 14 }}>
-          <StatCard
-            title="Vence hoje (a pagar)"
-            value={formatCurrency(somaPagarHoje)}
-            icon={Clock}
-            tone={somaPagarHoje > 0 ? 'warning' : 'neutral'}
-            footer={`${pagarHoje.length} conta(s)`}
-          />
-          <StatCard
-            title="Em atraso — a pagar"
-            value={formatCurrency(somaPagarAtraso)}
-            icon={ArrowDownCircle}
-            tone={somaPagarAtraso > 0 ? 'danger' : 'neutral'}
-            footer={`${pagarAtraso.length} conta(s)`}
-          />
-          <StatCard
-            title="Em atraso — a receber"
-            value={formatCurrency(somaReceberAtraso)}
-            icon={ArrowUpCircle}
-            tone={somaReceberAtraso > 0 ? 'danger' : 'neutral'}
-            footer={`${receberAtraso.length} conta(s)`}
-          />
-        </div>
-      )}
-
-      {pendentes.length > 0 && (
-        <Card style={{ marginTop: 14, borderColor: 'var(--warning)', background: 'var(--warning-light)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, color: 'var(--warning-strong)' }}>
-            <Clock size={16} /> {pendentes.length} lançamento(s) aguardando ativação
-          </div>
-          <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {pendentes.slice(0, 4).map((t) => {
-              const c = data.categories.find((cc) => cc.id === t.categoriaId);
-              return (
-                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-body)', color: 'var(--warning-strong)', gap: 8 }}>
-                  <span>{c?.nome} · {formatCurrency(t.valor)} · ativa em {daysUntil(t.dataAtivacao)} dia(s)</span>
-                  {/* Só admin ativa antes do prazo — muitos produtos têm período de
-                      teste e o vendedor não deve poder pular essa validação. */}
-                  {role === 'admin' && (
-                    <button onClick={() => onActivateNow(t)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 'var(--fs-small)', cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
-                      Ativar agora
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-      )}
-
+      <SectionTitle icon={Receipt}>Detalhes e movimentação</SectionTitle>
       <div className="lomuz-main-grid">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <CashFlowChart
