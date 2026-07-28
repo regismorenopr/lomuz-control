@@ -3444,8 +3444,9 @@ function IndiceForm({ item, onSubmit, onCancel }) {
   );
 }
 
-function CategoriasPage({ data, persist, askConfirm }) {
-  const [subTab, setSubTab] = useState('categorias');
+// subTab vem de fora porque o menu do cabeçalho abre um cadastro específico
+// direto, sem passar pela primeira aba.
+function CategoriasPage({ data, persist, askConfirm, subTab, setSubTab }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [showPlanoForm, setShowPlanoForm] = useState(false);
@@ -4612,6 +4613,7 @@ export default function App() {
   const [role, setRole] = useState('vendedor');
   const [currentVendedorId, setCurrentVendedorId] = useState(null);
   const [period, setPeriod] = useState({ type: 'mes_atual', start: '', end: '' });
+  const [cadastroTab, setCadastroTab] = useState('categorias');
 
   const [showAddTx, setShowAddTx] = useState(false);
   const [showImportCsv, setShowImportCsv] = useState(false);
@@ -5149,6 +5151,9 @@ export default function App() {
         pageSubtitle={pageSubtitles[page]}
         alerts={alerts}
         onAlertClick={(a) => setPage(a.page || 'inicio')}
+        submenus={role !== 'vendedor' ? { categorias: CADASTROS_TABS } : {}}
+        activeSubKey={cadastroTab}
+        onSubSelect={setCadastroTab}
       >
         {page === 'inicio' && (
           <Dashboard data={data} role={role} currentVendedorId={currentVendedorId} period={period} setPeriod={setPeriod} onAddClick={openAddTransaction} onGoTo={setPage} onActivateNow={activateNow} onCustomizeClick={() => setShowCustomize(true)} onReviewSale={openEditTransaction} onEditMural={() => setShowMural(true)} />
@@ -5169,7 +5174,7 @@ export default function App() {
           <AjudaPage role={role} />
         )}
         {page === 'categorias' && role !== 'vendedor' && (
-          <CategoriasPage data={data} persist={persist} askConfirm={askConfirm} />
+          <CategoriasPage data={data} persist={persist} askConfirm={askConfirm} subTab={cadastroTab} setSubTab={setCadastroTab} />
         )}
         {page === 'config' && (
           <ConfiguracoesPage

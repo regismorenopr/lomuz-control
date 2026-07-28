@@ -33,26 +33,107 @@ export function navItemsFor(role) {
   return base;
 }
 
+const navBtnStyle = (active) => ({
+  display: 'flex', alignItems: 'center', gap: 7, padding: '9px 14px',
+  borderRadius: 'var(--radius-pill)', border: 'none', cursor: 'pointer',
+  background: active ? 'var(--primary)' : 'transparent',
+  color: active ? 'var(--on-primary)' : 'var(--text-secondary)',
+  fontSize: 'var(--fs-body)', fontWeight: active ? 700 : 600, whiteSpace: 'nowrap',
+  transition: 'background .15s, color .15s',
+});
+const navHoverIn = (active) => (e) => {
+  if (active) return;
+  e.currentTarget.style.background = 'var(--surface-2)';
+  e.currentTarget.style.color = 'var(--text-primary)';
+};
+const navHoverOut = (active) => (e) => {
+  if (active) return;
+  e.currentTarget.style.background = 'transparent';
+  e.currentTarget.style.color = 'var(--text-secondary)';
+};
+
 function TopNavItem({ item, active, onClick }) {
   const Icon = item.icon;
   return (
     <button
       onClick={onClick}
       aria-current={active ? 'page' : undefined}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 7, padding: '9px 14px',
-        borderRadius: 'var(--radius-pill)', border: 'none', cursor: 'pointer',
-        background: active ? 'var(--primary)' : 'transparent',
-        color: active ? '#fff' : 'var(--text-secondary)',
-        fontSize: 13.5, fontWeight: active ? 700 : 600, whiteSpace: 'nowrap',
-        transition: 'background .15s, color .15s',
-      }}
-      onMouseEnter={(e) => { if (!active) { e.currentTarget.style.background = 'var(--surface-2)'; e.currentTarget.style.color = 'var(--text-primary)'; } }}
-      onMouseLeave={(e) => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-secondary)'; } }}
+      style={navBtnStyle(active)}
+      onMouseEnter={navHoverIn(active)}
+      onMouseLeave={navHoverOut(active)}
     >
       <Icon size={17} strokeWidth={active ? 2.3 : 1.9} style={{ flexShrink: 0 }} />
       {item.label}
     </button>
+  );
+}
+
+// Item de menu que abre uma lista — usado por "Cadastros", que reúne 5
+// cadastros diferentes. Sem custo de largura: a lista só existe ao abrir,
+// então a decisão de não ter menu lateral (ver topo do arquivo) segue valendo.
+function TopNavMenuItem({ item, active, subItems, activeSubKey, onSelect }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const Icon = item.icon;
+
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    function onEsc(e) { if (e.key === 'Escape') setOpen(false); }
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onEsc);
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onEsc); };
+  }, [open]);
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-current={active ? 'page' : undefined}
+        style={navBtnStyle(active)}
+        onMouseEnter={navHoverIn(active)}
+        onMouseLeave={navHoverOut(active)}
+      >
+        <Icon size={17} strokeWidth={active ? 2.3 : 1.9} style={{ flexShrink: 0 }} />
+        {item.label}
+        <ChevronDown size={15} style={{ flexShrink: 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          style={{
+            position: 'absolute', left: 0, top: 'calc(100% + 6px)', minWidth: 210, zIndex: 60,
+            background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+            boxShadow: 'var(--shadow-lg)', padding: 6, animation: 'lomuzFadeIn .12s ease-out',
+          }}
+        >
+          {subItems.map((sub) => {
+            const subAtivo = active && activeSubKey === sub.key;
+            return (
+              <button
+                key={sub.key}
+                role="menuitem"
+                onClick={() => { setOpen(false); onSelect(sub.key); }}
+                style={{
+                  display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px',
+                  background: subAtivo ? 'var(--surface-2)' : 'transparent', border: 'none',
+                  borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+                  color: subAtivo ? 'var(--primary-text)' : 'var(--text-primary)',
+                  fontSize: 'var(--fs-body)', fontWeight: subAtivo ? 700 : 600,
+                }}
+                onMouseEnter={(e) => { if (!subAtivo) e.currentTarget.style.background = 'var(--surface-2)'; }}
+                onMouseLeave={(e) => { if (!subAtivo) e.currentTarget.style.background = 'transparent'; }}
+              >
+                {sub.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -212,6 +293,7 @@ export function AppShell({
   role, nome, page, setPage, onLogout,
   pageTitle, pageSubtitle,
   alerts = [], onAlertClick,
+  submenus = {}, activeSubKey, onSubSelect,
   children,
 }) {
   const items = navItemsFor(role);
@@ -229,7 +311,18 @@ export function AppShell({
 
           <nav aria-label="Navegação principal" className="lomuz-topnav">
             {items.map((it) => (
-              <TopNavItem key={it.key} item={it} active={page === it.key} onClick={() => setPage(it.key)} />
+              submenus[it.key] ? (
+                <TopNavMenuItem
+                  key={it.key}
+                  item={it}
+                  active={page === it.key}
+                  subItems={submenus[it.key]}
+                  activeSubKey={activeSubKey}
+                  onSelect={(subKey) => { onSubSelect(subKey); setPage(it.key); }}
+                />
+              ) : (
+                <TopNavItem key={it.key} item={it} active={page === it.key} onClick={() => setPage(it.key)} />
+              )
             ))}
           </nav>
 
