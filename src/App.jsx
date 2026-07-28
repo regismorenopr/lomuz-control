@@ -2441,12 +2441,14 @@ function LancamentosPage({ data, role, currentVendedorId, onEdit, onImportClick 
   const [filterTipo, setFilterTipo] = useState('todos');
   const [filterCat, setFilterCat] = useState('todas');
   const [filterPeriodo, setFilterPeriodo] = useState('todos');
+  const [filterRecorrente, setFilterRecorrente] = useState('todos');
   const [busca, setBusca] = useState('');
   const [totalsMode, setTotalsMode] = useState('geral');
 
   let list = scopedTransactions(data, role, currentVendedorId);
   if (filterTipo !== 'todos') list = list.filter((t) => t.tipo === filterTipo);
   if (filterCat !== 'todas') list = list.filter((t) => t.categoriaId === filterCat);
+  if (filterRecorrente === 'somente') list = list.filter((t) => t.recorrente);
   if (filterPeriodo !== 'todos') {
     const r = getPeriodRange({ type: filterPeriodo });
     // Vendas antigas com data_estimada (importação sem data real) só aparecem
@@ -2523,6 +2525,14 @@ function LancamentosPage({ data, role, currentVendedorId, onEdit, onImportClick 
           <Chip active={filterPeriodo === 'mes_atual'} onClick={() => setFilterPeriodo('mes_atual')}>Este mês</Chip>
           <Chip active={filterPeriodo === 'ultimos_3'} onClick={() => setFilterPeriodo('ultimos_3')}>Últimos 3 meses</Chip>
           <Chip active={filterPeriodo === 'ano_atual'} onClick={() => setFilterPeriodo('ano_atual')}>Este ano</Chip>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)', marginBottom: 6 }}>Recorrência</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <Chip active={filterRecorrente === 'todos'} onClick={() => setFilterRecorrente('todos')}>Todos</Chip>
+          <Chip active={filterRecorrente === 'somente'} onClick={() => setFilterRecorrente('somente')}>Somente recorrentes</Chip>
         </div>
       </div>
 
