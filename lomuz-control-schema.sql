@@ -100,6 +100,10 @@ create table clientes (
   contato_telefone text,
   contato_email text,
   indice_reajuste_id text references indices_reajuste(id) on delete set null,
+  -- Data da próxima correção de contrato pelo índice acima. O admin atualiza
+  -- (+1 ano) depois de aplicar o reajuste; o dashboard avisa quando essa data
+  -- está a 30 dias ou menos, ou já passou.
+  proximo_reajuste date,
   ativo boolean not null default true,
   observacoes text,
   created_at timestamptz default now()
@@ -172,6 +176,14 @@ create table transactions (
   -- da evolução mês a mês (evitaria um pico artificial num único mês),
   -- mantendo-as nos totais gerais/acumulados.
   data_estimada boolean not null default false,
+  -- Contas a pagar/receber: por padrão todo lançamento já está liquidado
+  -- (pago = true), como sempre foi. Só fica false quando alguém registra uma
+  -- conta em aberto (com vencimento no futuro) — aí ela some do "pago"
+  -- normal e passa a contar nos cartões de vencimento/atraso do dashboard.
+  -- Lançamento recorrente não usa isso: cada ocorrência é calculada na hora,
+  -- não fica guardada, então recorrente sempre é pago = true.
+  pago boolean not null default true,
+  data_vencimento date,
   created_at timestamptz default now()
 );
 

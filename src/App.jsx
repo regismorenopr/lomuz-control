@@ -16,7 +16,7 @@ import { AppShell, navItemsFor } from './components/AppShell.jsx';
 import { LogoHorizontal } from './brand/Logo.jsx';
 import {
   StatCard, TrendIndicator, StatusBadge, CashFlowChart, Panel, PanelLink,
-  EmptyBlock, NotAvailableBlock, StatCardSkeleton, Skeleton, formatBRL,
+  EmptyBlock, StatCardSkeleton, Skeleton, formatBRL,
 } from './components/dashboard.jsx';
 import { CurrencyInput } from './components/CurrencyInput.jsx';
 
@@ -119,6 +119,8 @@ function txToRow(tx, userId) {
     forma_pagamento: tx.formaPagamento || null,
     plano_id: tx.planoId || null,
     comissao_percentual: tx.comissaoPercentual != null ? tx.comissaoPercentual : null,
+    pago: tx.pago !== false,
+    data_vencimento: tx.dataVencimento || null,
   };
 }
 function rowToTx(row) {
@@ -144,6 +146,8 @@ function rowToTx(row) {
     planoId: row.plano_id || null,
     comissaoPercentual: row.comissao_percentual != null ? Number(row.comissao_percentual) : null,
     dataEstimada: !!row.data_estimada,
+    pago: row.pago !== false,
+    dataVencimento: row.data_vencimento || null,
   };
 }
 function planoToRow(p) {
@@ -210,6 +214,7 @@ function clienteToRow(c) {
     contato_telefone: c.contatoTelefone || null,
     contato_email: c.contatoEmail || null,
     indice_reajuste_id: c.indiceReajusteId || null,
+    proximo_reajuste: c.proximoReajuste || null,
     ativo: c.ativo !== false,
     observacoes: c.observacoes || null,
   };
@@ -228,6 +233,7 @@ function rowToCliente(row) {
     contatoTelefone: row.contato_telefone || '',
     contatoEmail: row.contato_email || '',
     indiceReajusteId: row.indice_reajuste_id,
+    proximoReajuste: row.proximo_reajuste || null,
     ativo: row.ativo !== false,
     observacoes: row.observacoes || '',
   };
@@ -631,6 +637,39 @@ function buildCompanyEvolution(transactions, monthsBack, monthsForward = 0) {
   return rows;
 }
 
+// Clientes ativos cujo próximo reajuste de contrato está a `diasJanela` dias
+// ou menos (inclui atrasado). Base do aviso no sino e no banner da página de
+// Clientes — nenhum reajuste é aplicado sozinho, só avisa.
+function clientesComReajustePendente(clientes, diasJanela = 30) {
+  const hojeISO = toISODate(new Date());
+  const limiteISO = toISODate(addDays(new Date(), diasJanela));
+  return (clientes || [])
+    .filter((c) => c.ativo !== false && c.proximoReajuste && c.proximoReajuste <= limiteISO)
+    .map((c) => ({ ...c, atrasado: c.proximoReajuste < hojeISO }))
+    .sort((a, b) => a.proximoReajuste.localeCompare(b.proximoReajuste));
+}
+
+// Próximos vencimentos: junta a próxima ocorrência de cada recorrente ativa
+// (calculada na hora, não existe uma linha por mês) com as contas pontuais
+// em aberto (pago = false) que já têm vencimento definido. Ordenado por data.
+function buildProximosVencimentos(transactions, diasJanela = 45) {
+  const hoje = new Date(new Date().setHours(0, 0, 0, 0));
+  const fim = addDays(hoje, diasJanela);
+  const linhas = [];
+  transactions.forEach((t) => {
+    if (t.status !== 'aprovado') return;
+    if (t.recorrente) {
+      if (getRecurrenceStatus(t) !== 'ativo') return;
+      const occ = expandOccurrences(t, hoje, fim);
+      if (occ.length === 0) return;
+      linhas.push({ id: t.id, data: toISODate(occ[0]), tipo: t.tipo, valor: t.valor, descricao: t.descricao, clienteNome: t.clienteNome, recorrente: true });
+    } else if (t.pago === false && t.dataVencimento) {
+      linhas.push({ id: t.id, data: t.dataVencimento, tipo: t.tipo, valor: t.valor, descricao: t.descricao, clienteNome: t.clienteNome, recorrente: false, atrasado: t.dataVencimento < toISODate(hoje) });
+    }
+  });
+  return linhas.sort((a, b) => a.data.localeCompare(b.data));
+}
+
 // Cancelamentos de recorrências por mês, últimos N meses.
 function buildCancelamentosPorMes(transactions, monthsBack) {
   const today = new Date();
@@ -685,6 +724,8 @@ function txToDraft(tx) {
     formaPagamento: tx.formaPagamento || '',
     planoId: tx.planoId || '',
     comissaoPercentual: tx.comissaoPercentual != null ? String(tx.comissaoPercentual) : '',
+    pago: tx.pago !== false,
+    dataVencimento: tx.dataVencimento || '',
   };
 }
 
@@ -837,6 +878,26 @@ function OptionCard({ active, title, desc, onClick, children }) {
       <div style={{ fontSize: 12.5, color: 'var(--ink-soft)', marginLeft: 28, marginTop: 4, lineHeight: 1.4 }}>{desc}</div>
       {children}
     </div>
+  );
+}
+
+function QuickAddButton({ icon: Icon, label, desc, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', width: '100%',
+        padding: 14, borderRadius: 14, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer',
+      }}
+    >
+      <span aria-hidden="true" style={{ width: 40, height: 40, borderRadius: 'var(--radius, 10px)', background: 'var(--brand-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        <Icon size={19} color="var(--primary-text)" />
+      </span>
+      <span style={{ minWidth: 0 }}>
+        <span style={{ display: 'block', fontWeight: 700, fontSize: 14.5 }}>{label}</span>
+        <span style={{ display: 'block', fontSize: 12.5, color: 'var(--ink-soft)', marginTop: 2 }}>{desc}</span>
+      </span>
+    </button>
   );
 }
 
@@ -1462,6 +1523,24 @@ function TransactionForm({ draft, categories, role, vendedores, planos, onSubmit
         <input type="date" value={local.data} onChange={(e) => set('data', e.target.value)} style={inputStyle} />
       </Field>
 
+      {!local.recorrente && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0' }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>{local.tipo === 'despesa' ? 'Já foi pago' : 'Já foi recebido'}</div>
+            <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>
+              {local.pago ? 'Conta liquidada, não entra em vencimentos.' : 'Fica em aberto até você marcar como pago/recebido.'}
+            </div>
+          </div>
+          <Toggle checked={local.pago} onChange={(v) => set('pago', v)} />
+        </div>
+      )}
+
+      {!local.recorrente && !local.pago && (
+        <Field label="Vencimento">
+          <input type="date" value={local.dataVencimento || local.data} onChange={(e) => set('dataVencimento', e.target.value)} style={inputStyle} />
+        </Field>
+      )}
+
       {local.tipo === 'receita' && role === 'admin' && vendedores.length > 0 && (
         <Field label="Vendedor (opcional)" hint="Atribua esta venda a um vendedor para contar na previsão dele.">
           <select value={local.vendedorId || ''} onChange={(e) => set('vendedorId', e.target.value)} style={inputStyle}>
@@ -1844,6 +1923,19 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
     .sort((a, b) => b.valor - a.valor)
     .slice(0, 5);
 
+  // Contas a pagar/receber em aberto — só lançamentos pontuais marcados como
+  // "não pago ainda", com vencimento. Recorrente não entra aqui (ver
+  // buildProximosVencimentos).
+  const hojeISO = toISODate(new Date());
+  const emAberto = txs.filter((t) => !t.recorrente && t.pago === false && t.dataVencimento);
+  const pagarHoje = emAberto.filter((t) => t.tipo === 'despesa' && t.dataVencimento === hojeISO);
+  const pagarAtraso = emAberto.filter((t) => t.tipo === 'despesa' && t.dataVencimento < hojeISO);
+  const receberAtraso = emAberto.filter((t) => t.tipo === 'receita' && t.dataVencimento < hojeISO);
+  const somaPagarHoje = round2(pagarHoje.reduce((s, t) => s + t.valor, 0));
+  const somaPagarAtraso = round2(pagarAtraso.reduce((s, t) => s + t.valor, 0));
+  const somaReceberAtraso = round2(receberAtraso.reduce((s, t) => s + t.valor, 0));
+  const proximosVencimentos = buildProximosVencimentos(txs);
+
   const pendentes = txs.filter((t) => t.recorrente && getRecurrenceStatus(t) === 'pendente');
   // Vendas lançadas por vendedores esperando o admin revisar e aprovar.
   const aguardandoRevisao = role === 'admin' ? data.transactions.filter((t) => t.status === 'pendente') : [];
@@ -1908,6 +2000,46 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
 
       <PeriodSelector value={period} onChange={setPeriod} />
 
+      {/* Painel em destaque: os 3 números que mais importam pro período
+          escolhido acima — mesmo cálculo (receitas.total/despesas.total/saldo)
+          usado nos cartões abaixo, só que aqui em formato resumo, então os
+          valores sempre correspondem ao período selecionado. */}
+      <Card style={{ marginTop: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--primary-text)' }}>Valores Previstos</span>
+          <span style={{ fontSize: 11.5, color: 'var(--ink-soft)' }}>no período</span>
+        </div>
+        <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: '1 1 160px' }}>
+            <span style={{ width: 40, height: 40, borderRadius: '50%', background: 'var(--success-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <ArrowUpCircle size={20} color="var(--success)" />
+            </span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 800, fontSize: 17, whiteSpace: 'nowrap' }}>{formatCurrency(receitas.total)}</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>Receita Prevista</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: '1 1 160px' }}>
+            <span style={{ width: 40, height: 40, borderRadius: '50%', background: 'var(--danger-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <ArrowDownCircle size={20} color="var(--danger)" />
+            </span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 800, fontSize: 17, whiteSpace: 'nowrap' }}>{formatCurrency(despesas.total)}</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>Despesa Prevista</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: '1 1 160px' }}>
+            <span style={{ width: 40, height: 40, borderRadius: '50%', background: saldo >= 0 ? 'var(--success-light)' : 'var(--danger-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <HeartPulse size={20} color={saldo >= 0 ? 'var(--success)' : 'var(--danger)'} />
+            </span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 800, fontSize: 17, whiteSpace: 'nowrap' }}>{formatCurrency(saldo)}</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>Saldo</div>
+            </div>
+          </div>
+        </div>
+      </Card>
+
       <div className="lomuz-kpi-grid" style={{ marginTop: 14 }}>
         <StatCard
           title="Saldo acumulado"
@@ -1960,11 +2092,35 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
           value={topProdutos[0]?.nome || '—'}
           icon={Award}
           tone="neutral"
-          footer={topProdutos[0] ? `${formatCurrency(topProdutos[0].valor)} no período · toque para ver o ranking` : 'Sem vendas categorizadas neste período'}
-          onClick={() => toggleFocus('produtos')}
-          active={focusMetric === 'produtos'}
+          footer={topProdutos[0] ? `${formatCurrency(topProdutos[0].valor)} no período · ranking abaixo do gráfico` : 'Sem vendas categorizadas neste período'}
         />
       </div>
+
+      {(somaPagarHoje > 0 || somaPagarAtraso > 0 || somaReceberAtraso > 0) && (
+        <div className="lomuz-kpi-grid" style={{ marginTop: 14 }}>
+          <StatCard
+            title="Vence hoje (a pagar)"
+            value={formatCurrency(somaPagarHoje)}
+            icon={Clock}
+            tone={somaPagarHoje > 0 ? 'warning' : 'neutral'}
+            footer={`${pagarHoje.length} conta(s)`}
+          />
+          <StatCard
+            title="Em atraso — a pagar"
+            value={formatCurrency(somaPagarAtraso)}
+            icon={ArrowDownCircle}
+            tone={somaPagarAtraso > 0 ? 'danger' : 'neutral'}
+            footer={`${pagarAtraso.length} conta(s)`}
+          />
+          <StatCard
+            title="Em atraso — a receber"
+            value={formatCurrency(somaReceberAtraso)}
+            icon={ArrowUpCircle}
+            tone={somaReceberAtraso > 0 ? 'danger' : 'neutral'}
+            footer={`${receberAtraso.length} conta(s)`}
+          />
+        </div>
+      )}
 
       {pendentes.length > 0 && (
         <Card style={{ marginTop: 14, borderColor: 'var(--warning)', background: 'var(--warning-light)' }}>
@@ -1992,7 +2148,20 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
       )}
 
       <div className="lomuz-main-grid">
-        {focusMetric === 'produtos' ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <CashFlowChart
+            rows={focusMetric === 'saldo' ? acumuladoRows : focusMetric === 'resultado' ? resultadoRows : cashFlowRows}
+            mode={focusMetric === 'saldo' ? 'saldo' : focusMetric === 'resultado' ? 'resultado' : 'fluxo'}
+            emphasize={focusMetric === 'receitas' ? 'entradas' : focusMetric === 'despesas' ? 'saidas' : null}
+            title={
+              focusMetric === 'saldo' ? 'Evolução do saldo acumulado'
+                : focusMetric === 'resultado' ? 'Evolução do resultado mensal'
+                  : focusMetric === 'receitas' ? 'Fluxo de caixa — receitas em destaque'
+                    : focusMetric === 'despesas' ? 'Fluxo de caixa — despesas em destaque'
+                      : 'Fluxo de caixa'
+            }
+          />
+
           <Panel title="Ranking de produtos mais vendidos">
             {topProdutos.length === 0 ? (
               <div style={{ padding: '10px 4px' }}>
@@ -2012,30 +2181,32 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
               </div>
             )}
           </Panel>
-        ) : (
-          <CashFlowChart
-            rows={focusMetric === 'saldo' ? acumuladoRows : focusMetric === 'resultado' ? resultadoRows : cashFlowRows}
-            mode={focusMetric === 'saldo' ? 'saldo' : focusMetric === 'resultado' ? 'resultado' : 'fluxo'}
-            emphasize={focusMetric === 'receitas' ? 'entradas' : focusMetric === 'despesas' ? 'saidas' : null}
-            title={
-              focusMetric === 'saldo' ? 'Evolução do saldo acumulado'
-                : focusMetric === 'resultado' ? 'Evolução do resultado mensal'
-                  : focusMetric === 'receitas' ? 'Fluxo de caixa — receitas em destaque'
-                    : focusMetric === 'despesas' ? 'Fluxo de caixa — despesas em destaque'
-                      : 'Fluxo de caixa'
-            }
-          />
-        )}
+        </div>
 
         <Panel title="Próximos vencimentos">
-          {/* Este bloco NÃO mostra exemplo inventado: hoje um lançamento tem só
-              uma data, sem campo de vencimento, sem "pago/em aberto" e sem
-              fornecedor/cliente. Enquanto esses campos não existirem no banco,
-              o painel diz o que falta em vez de exibir número falso. */}
-          <NotAvailableBlock
-            title="Depende de campos que ainda não existem"
-            desc="Para listar vencimentos é preciso separar a data de vencimento da data do lançamento e marcar o que já foi pago ou recebido. Hoje cada lançamento tem apenas uma data. Me avise que eu incluo esses campos."
-          />
+          {proximosVencimentos.length === 0 ? (
+            <div style={{ padding: '10px 4px' }}>
+              <EmptyBlock icon={Clock} title="Nada por vencer" desc="Contratos recorrentes ativos e contas em aberto com vencimento aparecem aqui, ordenados por data." />
+            </div>
+          ) : (
+            <div style={{ padding: '6px 4px' }}>
+              {proximosVencimentos.slice(0, 8).map((v) => (
+                <div key={`${v.id}-${v.data}`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {v.clienteNome || v.descricao || (v.tipo === 'receita' ? 'Receita' : 'Despesa')}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: v.atrasado ? 'var(--negative)' : 'var(--ink-soft)', fontWeight: v.atrasado ? 700 : 400 }}>
+                      {formatDateBR(v.data)}{v.recorrente ? ' · recorrente' : ''}{v.atrasado ? ' · atrasado' : ''}
+                    </div>
+                  </div>
+                  <div style={{ fontWeight: 700, fontSize: 13.5, color: v.tipo === 'receita' ? 'var(--success)' : 'var(--negative)', whiteSpace: 'nowrap' }}>
+                    {formatCurrency(v.valor)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </Panel>
       </div>
 
@@ -3330,6 +3501,277 @@ function CategoriasPage({ data, persist, askConfirm }) {
 }
 
 /* =========================================================================
+   PÁGINA: CLIENTES
+   ========================================================================= */
+
+function ClienteForm({ item, ramosNegocio, indicesReajuste, onSubmit, onCancel, onDelete }) {
+  const [nomeFantasia, setNomeFantasia] = useState(item?.nomeFantasia || '');
+  const [razaoSocial, setRazaoSocial] = useState(item?.razaoSocial || '');
+  const [organizacaoRede, setOrganizacaoRede] = useState(item?.organizacaoRede || '');
+  const [ramoNegocioId, setRamoNegocioId] = useState(item?.ramoNegocioId || '');
+  const [cidade, setCidade] = useState(item?.cidade || '');
+  const [estado, setEstado] = useState(item?.estado || '');
+  const [endereco, setEndereco] = useState(item?.endereco || '');
+  const [contatoNome, setContatoNome] = useState(item?.contatoNome || '');
+  const [contatoTelefone, setContatoTelefone] = useState(item?.contatoTelefone || '');
+  const [contatoEmail, setContatoEmail] = useState(item?.contatoEmail || '');
+  const [indiceReajusteId, setIndiceReajusteId] = useState(item?.indiceReajusteId || '');
+  const [proximoReajuste, setProximoReajuste] = useState(item?.proximoReajuste || '');
+  const [observacoes, setObservacoes] = useState(item?.observacoes || '');
+  const [ativo, setAtivo] = useState(item?.ativo !== false);
+  const [error, setError] = useState('');
+
+  function submit() {
+    if (!nomeFantasia.trim()) { setError('Informe o nome do cliente.'); return; }
+    onSubmit({
+      id: item?.id || uid(),
+      nomeFantasia: nomeFantasia.trim(),
+      razaoSocial: razaoSocial.trim(),
+      organizacaoRede: organizacaoRede.trim(),
+      ramoNegocioId: ramoNegocioId || null,
+      cidade: cidade.trim(),
+      estado: estado.trim(),
+      endereco: endereco.trim(),
+      contatoNome: contatoNome.trim(),
+      contatoTelefone: contatoTelefone.trim(),
+      contatoEmail: contatoEmail.trim(),
+      indiceReajusteId: indiceReajusteId || null,
+      proximoReajuste: proximoReajuste || null,
+      observacoes: observacoes.trim(),
+      ativo,
+    });
+  }
+
+  return (
+    <div>
+      <Field label="Nome do cliente"><input type="text" style={inputStyle} value={nomeFantasia} onChange={(e) => setNomeFantasia(e.target.value)} placeholder="Ex.: Supermercado Central" /></Field>
+      <Field label="Razão social (opcional)"><input type="text" style={inputStyle} value={razaoSocial} onChange={(e) => setRazaoSocial(e.target.value)} /></Field>
+      <Field label="Rede/organização (opcional)"><input type="text" style={inputStyle} value={organizacaoRede} onChange={(e) => setOrganizacaoRede(e.target.value)} placeholder="Ex.: Rede Sul 10" /></Field>
+
+      <Field label="Ramo de negócio">
+        <select value={ramoNegocioId} onChange={(e) => setRamoNegocioId(e.target.value)} style={inputStyle}>
+          <option value="">Não informado</option>
+          {(ramosNegocio || []).map((r) => <option key={r.id} value={r.id}>{r.nome}</option>)}
+        </select>
+      </Field>
+
+      <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ flex: 2 }}><Field label="Cidade"><input type="text" style={inputStyle} value={cidade} onChange={(e) => setCidade(e.target.value)} /></Field></div>
+        <div style={{ flex: 1 }}><Field label="UF"><input type="text" maxLength={2} style={{ ...inputStyle, textTransform: 'uppercase' }} value={estado} onChange={(e) => setEstado(e.target.value.toUpperCase())} /></Field></div>
+      </div>
+      <Field label="Endereço (opcional)"><input type="text" style={inputStyle} value={endereco} onChange={(e) => setEndereco(e.target.value)} /></Field>
+
+      <Field label="Contato (opcional)"><input type="text" style={inputStyle} value={contatoNome} onChange={(e) => setContatoNome(e.target.value)} placeholder="Nome de quem responde por esse cliente" /></Field>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ flex: 1 }}><Field label="Telefone"><input type="text" style={inputStyle} value={contatoTelefone} onChange={(e) => setContatoTelefone(e.target.value)} /></Field></div>
+        <div style={{ flex: 1 }}><Field label="E-mail"><input type="email" style={inputStyle} value={contatoEmail} onChange={(e) => setContatoEmail(e.target.value)} /></Field></div>
+      </div>
+
+      <div style={{ background: 'var(--surface-2)', borderRadius: 12, padding: 12, marginTop: 4, marginBottom: 14 }}>
+        <Field label="Índice de reajuste" hint="Usado no aviso anual de correção de contrato.">
+          <select value={indiceReajusteId} onChange={(e) => setIndiceReajusteId(e.target.value)} style={inputStyle}>
+            <option value="">Nenhum</option>
+            {(indicesReajuste || []).map((i) => <option key={i.id} value={i.id}>{i.nome}</option>)}
+          </select>
+        </Field>
+        <Field label="Próximo reajuste" hint="O sistema avisa quando faltar 30 dias ou menos.">
+          <input type="date" value={proximoReajuste} onChange={(e) => setProximoReajuste(e.target.value)} style={inputStyle} />
+        </Field>
+      </div>
+
+      <Field label="Observações (opcional)">
+        <textarea rows={3} style={{ ...inputStyle, resize: 'vertical' }} value={observacoes} onChange={(e) => setObservacoes(e.target.value)} />
+      </Field>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderTop: '1px solid var(--border)' }}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>Cliente ativo</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>Desligue pra clientes que já encerraram, sem apagar o histórico.</div>
+        </div>
+        <Toggle checked={ativo} onChange={setAtivo} />
+      </div>
+
+      {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginTop: 10, fontWeight: 600 }}>{error}</div>}
+
+      <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+        {onDelete && (
+          <button onClick={onDelete} style={{ ...iconBtnStyle, width: 44, height: 44 }} aria-label="Remover cliente"><Trash2 size={16} /></button>
+        )}
+        <Button variant="secondary" onClick={onCancel} style={{ flex: 1 }}>Cancelar</Button>
+        <Button variant="primary" onClick={submit} style={{ flex: 2 }}>Salvar cliente</Button>
+      </div>
+    </div>
+  );
+}
+
+function ClientesPage({ data, role, persist, askConfirm }) {
+  const [busca, setBusca] = useState('');
+  const [filterRamo, setFilterRamo] = useState('todos');
+  const [filterProduto, setFilterProduto] = useState('todos');
+  const [filterAtivo, setFilterAtivo] = useState('ativos');
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+
+  const clientes = data.clientes || [];
+  const ramosNegocio = data.ramosNegocio || [];
+  const indicesReajuste = data.indicesReajuste || [];
+  const categoriasReceita = data.categories.filter((c) => c.tipo === 'receita');
+
+  // Quais categorias/produtos cada cliente já comprou — cruzado pelo nome
+  // (não existe vínculo por id entre venda e cadastro de cliente ainda).
+  const produtosPorCliente = new Map();
+  data.transactions.forEach((t) => {
+    if (t.tipo !== 'receita' || !t.clienteNome) return;
+    const chave = t.clienteNome.trim().toLowerCase();
+    if (!produtosPorCliente.has(chave)) produtosPorCliente.set(chave, new Set());
+    if (t.categoriaId) produtosPorCliente.get(chave).add(t.categoriaId);
+  });
+
+  const termo = busca.trim().toLowerCase();
+  let list = clientes.filter((c) => {
+    if (filterAtivo === 'ativos' && c.ativo === false) return false;
+    if (filterAtivo === 'inativos' && c.ativo !== false) return false;
+    if (filterRamo !== 'todos' && c.ramoNegocioId !== filterRamo) return false;
+    if (filterProduto !== 'todos') {
+      const produtos = produtosPorCliente.get((c.nomeFantasia || '').trim().toLowerCase());
+      if (!produtos || !produtos.has(filterProduto)) return false;
+    }
+    if (termo) {
+      const alvo = `${c.nomeFantasia} ${c.razaoSocial} ${c.organizacaoRede} ${c.cidade}`.toLowerCase();
+      if (!alvo.includes(termo)) return false;
+    }
+    return true;
+  });
+  list = [...list].sort((a, b) => (a.nomeFantasia || '').localeCompare(b.nomeFantasia || ''));
+
+  const reajustePendente = role === 'admin' ? clientesComReajustePendente(clientes) : [];
+
+  function save(cliente) {
+    const list2 = editing ? clientes.map((c) => (c.id === cliente.id ? cliente : c)) : [...clientes, cliente];
+    persist({ ...data, clientes: list2 });
+    setShowForm(false);
+    setEditing(null);
+  }
+  function remove(id) {
+    askConfirm('Remover este cliente? O histórico de vendas não é apagado.', () => {
+      persist({ ...data, clientes: clientes.filter((c) => c.id !== id) });
+      setShowForm(false);
+      setEditing(null);
+    });
+  }
+  function marcarReajustado(cliente) {
+    const proximo = toISODate(addMonths(parseISODate(cliente.proximoReajuste), 12));
+    persist({ ...data, clientes: clientes.map((c) => (c.id === cliente.id ? { ...c, proximoReajuste: proximo } : c)) });
+  }
+
+  return (
+    <div style={{ paddingTop: 12 }}>
+      {reajustePendente.length > 0 && (
+        <Card style={{ marginBottom: 14, borderColor: 'var(--warning)', background: 'var(--warning-light)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, color: 'var(--warning-strong)' }}>
+            <Clock size={16} /> {reajustePendente.length} cliente(s) com reajuste de contrato próximo ou atrasado
+          </div>
+          <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {reajustePendente.slice(0, 6).map((c) => {
+              const indice = indicesReajuste.find((i) => i.id === c.indiceReajusteId);
+              return (
+                <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, color: 'var(--warning-strong)', gap: 8 }}>
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {c.nomeFantasia} · {indice?.nome || 'sem índice'} · {c.atrasado ? 'atrasado desde' : 'em'} {formatDateBR(c.proximoReajuste)}
+                  </span>
+                  <button onClick={() => marcarReajustado(c)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 11.5, cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
+                    Marcar reajustado
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      <div style={{ position: 'relative', marginBottom: 10 }}>
+        <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--ink-soft)', pointerEvents: 'none' }} />
+        <input
+          type="text"
+          value={busca}
+          onChange={(e) => setBusca(e.target.value)}
+          placeholder="Buscar por nome, razão social ou cidade…"
+          style={{ ...inputStyle, paddingLeft: 34 }}
+        />
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 160px' }}>
+          <select value={filterRamo} onChange={(e) => setFilterRamo(e.target.value)} style={inputStyle}>
+            <option value="todos">Todos os ramos</option>
+            {ramosNegocio.map((r) => <option key={r.id} value={r.id}>{r.nome}</option>)}
+          </select>
+        </div>
+        <div style={{ flex: '1 1 160px' }}>
+          <select value={filterProduto} onChange={(e) => setFilterProduto(e.target.value)} style={inputStyle}>
+            <option value="todos">Todos os produtos</option>
+            {categoriasReceita.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+          </select>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Chip active={filterAtivo === 'ativos'} onClick={() => setFilterAtivo('ativos')}>Ativos</Chip>
+          <Chip active={filterAtivo === 'inativos'} onClick={() => setFilterAtivo('inativos')}>Inativos</Chip>
+          <Chip active={filterAtivo === 'todos'} onClick={() => setFilterAtivo('todos')}>Todos</Chip>
+        </div>
+      </div>
+
+      {list.length === 0 ? (
+        <EmptyState icon={Users} title="Nenhum cliente encontrado" desc="Ajuste os filtros ou cadastre um novo cliente." actionLabel={role === 'admin' ? '+ Novo cliente' : undefined} onAction={role === 'admin' ? () => { setEditing(null); setShowForm(true); } : undefined} />
+      ) : (
+        <Card style={{ padding: 0 }}>
+          {list.map((c, i) => {
+            const ramo = ramosNegocio.find((r) => r.id === c.ramoNegocioId);
+            const linha2 = [c.organizacaoRede || c.razaoSocial, [c.cidade, c.estado].filter(Boolean).join('/'), ramo?.nome].filter(Boolean).join(' · ');
+            return (
+              <div
+                key={c.id}
+                onClick={role === 'admin' ? () => { setEditing(c); setShowForm(true); } : undefined}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', borderBottom: i === list.length - 1 ? 'none' : '1px solid var(--border)', cursor: role === 'admin' ? 'pointer' : 'default' }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.nomeFantasia}</span>
+                    {c.ativo === false && <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ink-soft)', background: 'var(--surface-2)', borderRadius: 999, padding: '2px 8px', flexShrink: 0 }}>Inativo</span>}
+                  </div>
+                  {linha2 && <div style={{ fontSize: 12, color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{linha2}</div>}
+                  {(c.contatoTelefone || c.contatoEmail) && (
+                    <div style={{ fontSize: 11.5, color: 'var(--ink-soft)', marginTop: 2 }}>{[c.contatoTelefone, c.contatoEmail].filter(Boolean).join(' · ')}</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </Card>
+      )}
+
+      {role === 'admin' && list.length > 0 && (
+        <Button variant="primary" onClick={() => { setEditing(null); setShowForm(true); }} style={{ width: '100%', marginTop: 16 }}>
+          <Plus size={16} /> Novo cliente
+        </Button>
+      )}
+
+      {showForm && (
+        <Modal title={editing ? 'Editar cliente' : 'Novo cliente'} onClose={() => { setShowForm(false); setEditing(null); }}>
+          <ClienteForm
+            item={editing}
+            ramosNegocio={ramosNegocio}
+            indicesReajuste={indicesReajuste}
+            onSubmit={save}
+            onCancel={() => { setShowForm(false); setEditing(null); }}
+            onDelete={editing ? () => remove(editing.id) : null}
+          />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* =========================================================================
    NAVEGAÇÃO
    ========================================================================= */
 
@@ -3672,6 +4114,8 @@ export default function App() {
   const [showUsers, setShowUsers] = useState(false);
   const [showTheme, setShowTheme] = useState(false);
   const [showMural, setShowMural] = useState(false);
+  const [showQuickMenu, setShowQuickMenu] = useState(false);
+  const [showAddCliente, setShowAddCliente] = useState(false);
   const [editingTx, setEditingTx] = useState(null);
   const [txDraft, setTxDraft] = useState(null);
   const [txStep, setTxStep] = useState('form');
@@ -3936,10 +4380,10 @@ export default function App() {
     await supabase.auth.signOut();
   }
 
-  function openAddTransaction() {
+  function openAddTransaction(tipoPreset) {
     setEditingTx(null);
     setTxDraft({
-      tipo: role === 'vendedor' ? 'receita' : 'despesa',
+      tipo: tipoPreset || (role === 'vendedor' ? 'receita' : 'despesa'),
       valor: '',
       categoriaId: '',
       descricao: '',
@@ -3957,6 +4401,8 @@ export default function App() {
       formaPagamento: '',
       planoId: '',
       comissaoPercentual: '',
+      pago: true,
+      dataVencimento: '',
     });
     setTxStep('form');
     setShowAddTx(true);
@@ -3972,6 +4418,18 @@ export default function App() {
     setEditingTx(null);
     setTxDraft(null);
     setTxStep('form');
+  }
+
+  // Botão central de ação rápida: abre um menu com os 4 lançamentos mais
+  // comuns em vez de ir direto pro formulário de lançamento.
+  function quickAdd(tipo) {
+    setShowQuickMenu(false);
+    if (tipo === 'cliente') { setShowAddCliente(true); return; }
+    openAddTransaction(tipo === 'despesa' ? 'despesa' : 'receita');
+  }
+  function saveClienteQuick(cliente) {
+    persist({ ...data, clientes: [...(data.clientes || []), cliente] });
+    setShowAddCliente(false);
   }
 
   function handleFormSubmit(draft) {
@@ -4015,6 +4473,10 @@ export default function App() {
       comissaoPercentual: (draft.comissaoPercentual !== '' && draft.comissaoPercentual != null)
         ? (parseFloat(draft.comissaoPercentual) || 0)
         : null,
+      // Recorrente não usa conta a pagar/receber: cada ocorrência é calculada
+      // na hora, não existe uma linha guardada por mês pra marcar como paga.
+      pago: draft.recorrente ? true : (draft.pago !== false),
+      dataVencimento: (!draft.recorrente && draft.pago === false) ? (draft.dataVencimento || null) : null,
     };
     const list = editingTx ? data.transactions.map((t) => (t.id === tx.id ? tx : t)) : [...data.transactions, tx];
     persist({ ...data, transactions: list });
@@ -4114,6 +4576,7 @@ export default function App() {
     inicio: 'Visão geral',
     lancamentos: role === 'vendedor' ? 'Suas vendas' : 'Lançamentos',
     previsao: role === 'vendedor' ? 'Sua previsão' : 'Previsão',
+    clientes: 'Clientes',
     categorias: 'Categorias',
     config: 'Configurações',
   };
@@ -4127,6 +4590,7 @@ export default function App() {
     previsao: role === 'vendedor'
       ? 'Sua projeção de vendas, metas e comissão.'
       : 'Projeção financeira e panorama da equipe de vendas.',
+    clientes: 'Cadastro de clientes, com busca, filtros e aviso de reajuste de contrato.',
     categorias: 'Categorias de receita e despesa, e os planos negociados.',
     config: 'Aparência, usuários e mural de orientação.',
   };
@@ -4143,6 +4607,17 @@ export default function App() {
     .filter((t) => t.recorrente && getRecurrenceStatus(t) === 'pendente').length;
   if (aguardandoAtivacao > 0) {
     alerts.push({ tone: 'warning', page: 'inicio', text: `${aguardandoAtivacao} lançamento(s) recorrente(s) aguardando ativação.` });
+  }
+  if (role === 'admin') {
+    const reajustes = clientesComReajustePendente(data.clientes);
+    if (reajustes.length > 0) {
+      const atrasados = reajustes.filter((c) => c.atrasado).length;
+      alerts.push({
+        tone: atrasados > 0 ? 'danger' : 'warning',
+        page: 'clientes',
+        text: `${reajustes.length} cliente(s) com reajuste de contrato próximo${atrasados > 0 ? ` (${atrasados} atrasado(s))` : ''}.`,
+      });
+    }
   }
 
   return (
@@ -4168,6 +4643,9 @@ export default function App() {
         {page === 'previsao' && (
           <PrevisaoPage data={data} role={role} currentVendedorId={currentVendedorId} persist={persist} askConfirm={askConfirm} />
         )}
+        {page === 'clientes' && (
+          <ClientesPage data={data} role={role} persist={persist} askConfirm={askConfirm} />
+        )}
         {page === 'categorias' && role !== 'vendedor' && (
           <CategoriasPage data={data} persist={persist} askConfirm={askConfirm} />
         )}
@@ -4183,9 +4661,31 @@ export default function App() {
       </AppShell>
 
       <div className="lomuz-bottomnav">
-        <BottomNav page={page} setPage={setPage} onAdd={openAddTransaction} role={role} />
+        <BottomNav page={page} setPage={setPage} onAdd={() => setShowQuickMenu(true)} role={role} />
       </div>
       <div style={{ height: 96 }} className="lomuz-bottomnav" aria-hidden="true" />
+
+        {showQuickMenu && (
+          <Modal title="O que você quer lançar?" onClose={() => setShowQuickMenu(false)}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <QuickAddButton icon={Users} label="Cliente" desc="Cadastrar um novo cliente" onClick={() => quickAdd('cliente')} />
+              <QuickAddButton icon={ArrowUpCircle} label="Venda" desc="Lançar uma venda para um cliente" onClick={() => quickAdd('venda')} />
+              <QuickAddButton icon={ArrowUpCircle} label="Receita" desc="Lançar uma entrada que não é venda" onClick={() => quickAdd('receita')} />
+              <QuickAddButton icon={ArrowDownCircle} label="Despesa" desc="Lançar uma saída" onClick={() => quickAdd('despesa')} />
+            </div>
+          </Modal>
+        )}
+
+        {showAddCliente && (
+          <Modal title="Novo cliente" onClose={() => setShowAddCliente(false)}>
+            <ClienteForm
+              ramosNegocio={data.ramosNegocio}
+              indicesReajuste={data.indicesReajuste}
+              onSubmit={saveClienteQuick}
+              onCancel={() => setShowAddCliente(false)}
+            />
+          </Modal>
+        )}
 
         {showAddTx && (
           <Modal

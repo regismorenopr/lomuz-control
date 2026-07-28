@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Home, Receipt, TrendingUp, Tag, Settings, Bell, LogOut, ChevronDown } from 'lucide-react';
+import { Home, Receipt, TrendingUp, Tag, Settings, Bell, LogOut, ChevronDown, Users } from 'lucide-react';
 import { LogoHorizontal } from '../brand/Logo.jsx';
 
 /* =========================================================================
@@ -20,6 +20,7 @@ export function navItemsFor(role) {
     { key: 'inicio', label: 'Visão geral', icon: Home },
     { key: 'lancamentos', label: role === 'vendedor' ? 'Vendas' : 'Lançamentos', icon: Receipt },
     { key: 'previsao', label: 'Previsão', icon: TrendingUp },
+    { key: 'clientes', label: 'Clientes', icon: Users },
   ];
   if (role !== 'vendedor') base.push({ key: 'categorias', label: 'Categorias', icon: Tag });
   base.push({ key: 'config', label: 'Configurações', icon: Settings });
