@@ -1730,6 +1730,39 @@ function ActivationStep({ draft, onBack, onConfirm }) {
   );
 }
 
+function CancelRecurrenceStep({ onBack, onConfirm }) {
+  const [dataCancelamento, setDataCancelamento] = useState(toISODate(new Date()));
+  const [error, setError] = useState('');
+
+  function confirm() {
+    if (!dataCancelamento) { setError('Informe a data de desativação.'); return; }
+    onConfirm(dataCancelamento);
+  }
+
+  return (
+    <div>
+      <Card style={{ marginBottom: 20 }}>
+        <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6 }}>
+          Os lançamentos futuros dessa recorrência param, mas o histórico continua no seu painel. Se o cliente já tinha parado antes de hoje, informe a data real (ou estimada) em que isso aconteceu, para que os relatórios de desempenho e o gráfico de cancelamentos por mês fiquem corretos.
+        </p>
+      </Card>
+      <Field label="Data estimada de desativação">
+        <input
+          type="date"
+          value={dataCancelamento}
+          onChange={(e) => { setDataCancelamento(e.target.value); setError(''); }}
+          style={inputStyle}
+        />
+      </Field>
+      {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginTop: 4, fontWeight: 600 }}>{error}</div>}
+      <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+        <Button variant="secondary" onClick={onBack} style={{ flex: 1 }}>Voltar</Button>
+        <Button variant="primary" onClick={confirm} style={{ flex: 2 }}>Confirmar cancelamento</Button>
+      </div>
+    </div>
+  );
+}
+
 /* =========================================================================
    FORMULÁRIOS: CATEGORIA E VENDEDOR
    ========================================================================= */
@@ -4526,12 +4559,13 @@ export default function App() {
       closeTxModal();
     });
   }
-  function requestCancelRecurrence(tx) {
-    askConfirm('Cancelar esta recorrência? Os lançamentos futuros param, mas o histórico continua no seu painel.', () => {
-      const updated = { ...tx, dataCancelamento: toISODate(new Date()) };
-      persist({ ...data, transactions: data.transactions.map((t) => (t.id === tx.id ? updated : t)) });
-      closeTxModal();
-    });
+  function requestCancelRecurrence() {
+    setTxStep('cancelRecurrence');
+  }
+  function confirmCancelRecurrence(dataCancelamento) {
+    const updated = { ...editingTx, dataCancelamento };
+    persist({ ...data, transactions: data.transactions.map((t) => (t.id === editingTx.id ? updated : t)) });
+    closeTxModal();
   }
   function activateNow(tx) {
     const updated = { ...tx, ativacao: 'imediata', dataAtivacao: null, diasTeste: null };
@@ -4719,10 +4753,11 @@ export default function App() {
         {showAddTx && (
           <Modal
             title={
-              (editingTx && role === 'admin' && editingTx.status === 'pendente') ? 'Revisar venda'
-                : editingTx ? 'Editar lançamento'
-                  : txStep === 'form' ? (role === 'vendedor' ? 'Nova venda' : 'Novo lançamento')
-                    : txStep === 'confirmRecurrence' ? 'Confirmar recorrência' : 'Ativação da recorrência'
+              txStep === 'cancelRecurrence' ? 'Cancelar recorrência'
+                : (editingTx && role === 'admin' && editingTx.status === 'pendente') ? 'Revisar venda'
+                  : editingTx ? 'Editar lançamento'
+                    : txStep === 'form' ? (role === 'vendedor' ? 'Nova venda' : 'Novo lançamento')
+                      : txStep === 'confirmRecurrence' ? 'Confirmar recorrência' : 'Ativação da recorrência'
             }
             onClose={closeTxModal}
           >
@@ -4736,7 +4771,7 @@ export default function App() {
                 onSubmit={handleFormSubmit}
                 onCancel={closeTxModal}
                 onDelete={editingTx ? () => requestDeleteTransaction(editingTx) : null}
-                onCancelRecurrence={(editingTx && editingTx.recorrente && getRecurrenceStatus(editingTx) === 'ativo') ? () => requestCancelRecurrence(editingTx) : null}
+                onCancelRecurrence={(editingTx && editingTx.recorrente && getRecurrenceStatus(editingTx) === 'ativo') ? requestCancelRecurrence : null}
                 onApprove={approveTransaction}
                 onReject={rejectTransaction}
               />
@@ -4746,6 +4781,9 @@ export default function App() {
             )}
             {txStep === 'activation' && (
               <ActivationStep draft={txDraft} onBack={() => setTxStep('confirmRecurrence')} onConfirm={handleActivationChoice} />
+            )}
+            {txStep === 'cancelRecurrence' && (
+              <CancelRecurrenceStep onBack={() => setTxStep('form')} onConfirm={confirmCancelRecurrence} />
             )}
           </Modal>
         )}
