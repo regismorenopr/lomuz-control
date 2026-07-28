@@ -184,6 +184,11 @@ create table transactions (
   -- não fica guardada, então recorrente sempre é pago = true.
   pago boolean not null default true,
   data_vencimento date,
+  -- Confirmação de recebimento do ciclo atual de uma recorrência. O dia de
+  -- vencimento de cada ciclo é o dia do mês de "data" (ex.: contrato datado
+  -- 2026-07-01 vence todo dia 1º). Sem confirmação recente, o relatório de
+  -- vencimentos mostra o contrato como em atraso a partir desse dia.
+  ultima_confirmacao date,
   created_at timestamptz default now()
 );
 

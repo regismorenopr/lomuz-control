@@ -140,6 +140,7 @@ function txToRow(tx, userId) {
     comissao_percentual: tx.comissaoPercentual != null ? tx.comissaoPercentual : null,
     pago: tx.pago !== false,
     data_vencimento: tx.dataVencimento || null,
+    ultima_confirmacao: tx.ultimaConfirmacao || null,
   };
 }
 function rowToTx(row) {
@@ -167,6 +168,7 @@ function rowToTx(row) {
     dataEstimada: !!row.data_estimada,
     pago: row.pago !== false,
     dataVencimento: row.data_vencimento || null,
+    ultimaConfirmacao: row.ultima_confirmacao || null,
   };
 }
 function planoToRow(p) {
@@ -687,6 +689,53 @@ function buildProximosVencimentos(transactions, diasJanela = 45) {
     }
   });
   return linhas.sort((a, b) => a.data.localeCompare(b.data));
+}
+
+// Progressão de urgência do relatório de vencimentos — tempo estimado pelo
+// analista: até 10 dias corridos após o vencimento é folga normal (banco
+// processando, lembrete ainda não surtiu efeito); depois disso vira crítico.
+function urgenciaAtraso(diasAtraso) {
+  if (!diasAtraso || diasAtraso <= 0) return null;
+  if (diasAtraso <= 10) return { tone: 'warning', label: 'Atenção' };
+  return { tone: 'danger', label: 'Crítico' };
+}
+
+// Ciclo de vencimento atual de uma recorrência: o dia de vencimento é o dia
+// do mês da data original do contrato (ex.: contrato datado 2026-07-01
+// vence todo dia 1º). Sem confirmação de recebimento desde esse dia, conta
+// como dias em atraso — é um sinal pro relatório, o app não concilia banco.
+function cicloVencimentoRecorrente(tx, hoje = new Date()) {
+  const diaVencimento = parseISODate(tx.data).getDate();
+  let vencimentoCiclo = new Date(hoje.getFullYear(), hoje.getMonth(), diaVencimento);
+  if (vencimentoCiclo > hoje) vencimentoCiclo = new Date(hoje.getFullYear(), hoje.getMonth() - 1, diaVencimento);
+  const confirmado = !!(tx.ultimaConfirmacao && parseISODate(tx.ultimaConfirmacao) >= vencimentoCiclo);
+  const diasAtraso = confirmado ? 0 : Math.max(0, Math.round((hoje - vencimentoCiclo) / 86400000));
+  return { diaVencimento, vencimentoCiclo: toISODate(vencimentoCiclo), diasAtraso, confirmado };
+}
+
+// Relatório completo de vencimentos: cada recorrência ativa no ciclo atual +
+// contas pontuais em aberto, todas com o mesmo selo de urgência — a análise
+// por cliente que o zControl não oferecia.
+function buildRelatorioVencimentos(transactions, hoje = new Date()) {
+  const linhas = [];
+  transactions.forEach((t) => {
+    if (t.status !== 'aprovado') return;
+    if (t.recorrente) {
+      if (getRecurrenceStatus(t) !== 'ativo') return;
+      const ciclo = cicloVencimentoRecorrente(t, hoje);
+      linhas.push({
+        id: t.id, tipo: t.tipo, recorrente: true, clienteNome: t.clienteNome, descricao: t.descricao, valor: t.valor,
+        diaVencimento: ciclo.diaVencimento, vencimento: ciclo.vencimentoCiclo, diasAtraso: ciclo.diasAtraso, confirmado: ciclo.confirmado,
+      });
+    } else if (t.pago === false && t.dataVencimento) {
+      const diasAtraso = Math.max(0, Math.round((hoje - parseISODate(t.dataVencimento)) / 86400000));
+      linhas.push({
+        id: t.id, tipo: t.tipo, recorrente: false, clienteNome: t.clienteNome, descricao: t.descricao, valor: t.valor,
+        vencimento: t.dataVencimento, diasAtraso, confirmado: false,
+      });
+    }
+  });
+  return linhas.sort((a, b) => b.diasAtraso - a.diasAtraso);
 }
 
 // Cancelamentos de recorrências por mês, últimos N meses.
@@ -2051,46 +2100,6 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
       )}
 
       <PeriodSelector value={period} onChange={setPeriod} />
-
-      {/* Painel em destaque: os 3 números que mais importam pro período
-          escolhido acima — mesmo cálculo (receitas.total/despesas.total/saldo)
-          usado nos cartões abaixo, só que aqui em formato resumo, então os
-          valores sempre correspondem ao período selecionado. */}
-      <Card style={{ marginTop: 14 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--primary-text)' }}>Valores Previstos</span>
-          <span style={{ fontSize: 11.5, color: 'var(--ink-soft)' }}>no período</span>
-        </div>
-        <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: '1 1 160px' }}>
-            <span style={{ width: 40, height: 40, borderRadius: '50%', background: 'var(--success-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <ArrowUpCircle size={20} color="var(--success)" />
-            </span>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: 800, fontSize: 17, whiteSpace: 'nowrap' }}>{formatCurrency(receitas.total)}</div>
-              <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>Receita Prevista</div>
-            </div>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: '1 1 160px' }}>
-            <span style={{ width: 40, height: 40, borderRadius: '50%', background: 'var(--danger-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <ArrowDownCircle size={20} color="var(--danger)" />
-            </span>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: 800, fontSize: 17, whiteSpace: 'nowrap' }}>{formatCurrency(despesas.total)}</div>
-              <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>Despesa Prevista</div>
-            </div>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: '1 1 160px' }}>
-            <span style={{ width: 40, height: 40, borderRadius: '50%', background: saldo >= 0 ? 'var(--success-light)' : 'var(--danger-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <HeartPulse size={20} color={saldo >= 0 ? 'var(--success)' : 'var(--danger)'} />
-            </span>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: 800, fontSize: 17, whiteSpace: 'nowrap' }}>{formatCurrency(saldo)}</div>
-              <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>Saldo</div>
-            </div>
-          </div>
-        </div>
-      </Card>
 
       <div className="lomuz-kpi-grid" style={{ marginTop: 14 }}>
         <StatCard
@@ -3834,6 +3843,107 @@ function ClientesPage({ data, role, persist, askConfirm }) {
 }
 
 /* =========================================================================
+   PÁGINA: VENCIMENTOS
+   ========================================================================= */
+
+function VencimentosPage({ data, onConfirmarRecebimento, onEditTransaction }) {
+  const [busca, setBusca] = useState('');
+  const [filterUrgencia, setFilterUrgencia] = useState('todos');
+
+  const todasLinhas = buildRelatorioVencimentos(data.transactions);
+  const termo = busca.trim().toLowerCase();
+
+  const linhas = todasLinhas.filter((l) => {
+    if (termo && !(l.clienteNome || '').toLowerCase().includes(termo)) return false;
+    const urgencia = urgenciaAtraso(l.diasAtraso);
+    if (filterUrgencia === 'criticos' && urgencia?.tone !== 'danger') return false;
+    if (filterUrgencia === 'atencao' && urgencia?.tone !== 'warning') return false;
+    return true;
+  });
+
+  const qtdCriticos = todasLinhas.filter((l) => urgenciaAtraso(l.diasAtraso)?.tone === 'danger').length;
+  const qtdAtencao = todasLinhas.filter((l) => urgenciaAtraso(l.diasAtraso)?.tone === 'warning').length;
+  const qtdEmDia = todasLinhas.length - qtdCriticos - qtdAtencao;
+
+  return (
+    <div style={{ paddingTop: 12 }}>
+      <p style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 14, lineHeight: 1.5 }}>
+        Cada recorrência ativa entra pelo ciclo do mês atual (dia de vencimento = dia da data original do contrato). Sem confirmação de recebimento desde esse dia, o atraso conta e a urgência sobe — é um sinal pro seu acompanhamento, o app não concilia banco automaticamente.
+      </p>
+
+      <div className="lomuz-kpi-grid" style={{ marginBottom: 14 }}>
+        <StatCard title="Crítico" value={String(qtdCriticos)} icon={Clock} tone={qtdCriticos > 0 ? 'danger' : 'neutral'} footer="mais de 10 dias em atraso" />
+        <StatCard title="Atenção" value={String(qtdAtencao)} icon={Clock} tone={qtdAtencao > 0 ? 'warning' : 'neutral'} footer="até 10 dias em atraso" />
+        <StatCard title="Em dia" value={String(qtdEmDia)} icon={Check} tone="success" footer="vencimento confirmado ou ainda não chegou" />
+      </div>
+
+      <div style={{ position: 'relative', marginBottom: 10 }}>
+        <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--ink-soft)', pointerEvents: 'none' }} />
+        <input
+          type="text"
+          value={busca}
+          onChange={(e) => setBusca(e.target.value)}
+          placeholder="Buscar por cliente…"
+          style={{ ...inputStyle, paddingLeft: 34 }}
+        />
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+        <Chip active={filterUrgencia === 'todos'} onClick={() => setFilterUrgencia('todos')}>Todos</Chip>
+        <Chip active={filterUrgencia === 'criticos'} onClick={() => setFilterUrgencia('criticos')}>Críticos</Chip>
+        <Chip active={filterUrgencia === 'atencao'} onClick={() => setFilterUrgencia('atencao')}>Atenção</Chip>
+      </div>
+
+      {linhas.length === 0 ? (
+        <EmptyState icon={Clock} title="Nada por aqui" desc="Nenhum vencimento encontrado com esse filtro." />
+      ) : (
+        <Card style={{ padding: 0 }}>
+          {linhas.map((l, i) => {
+            const urgencia = urgenciaAtraso(l.diasAtraso);
+            return (
+              <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', borderBottom: i === linhas.length - 1 ? 'none' : '1px solid var(--border)' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {l.clienteNome || l.descricao || 'Sem cliente'}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {l.descricao || (l.tipo === 'receita' ? 'Receita' : 'Despesa')} · vence {formatDateBR(l.vencimento)}{l.recorrente ? ' · recorrente' : ''}
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: l.tipo === 'receita' ? 'var(--success)' : 'var(--negative)' }}>{formatCurrency(l.valor)}</div>
+                  {urgencia ? (
+                    <StatusBadge tone={urgencia.tone}>{urgencia.label} · {l.diasAtraso}d</StatusBadge>
+                  ) : (
+                    <span style={{ fontSize: 11, color: 'var(--ink-soft)' }}>Em dia</span>
+                  )}
+                </div>
+                {l.recorrente ? (
+                  <button
+                    onClick={() => onConfirmarRecebimento(l)}
+                    title="Confirmar recebimento deste ciclo"
+                    style={{ ...iconBtnStyle, flexShrink: 0 }}
+                  >
+                    <Check size={15} />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => onEditTransaction(data.transactions.find((t) => t.id === l.id))}
+                    title="Abrir lançamento"
+                    style={{ ...iconBtnStyle, flexShrink: 0 }}
+                  >
+                    <Edit2 size={15} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/* =========================================================================
    NAVEGAÇÃO
    ========================================================================= */
 
@@ -4571,6 +4681,12 @@ export default function App() {
     const updated = { ...tx, ativacao: 'imediata', dataAtivacao: null, diasTeste: null };
     persist({ ...data, transactions: data.transactions.map((t) => (t.id === tx.id ? updated : t)) });
   }
+  function confirmarRecebimento(linha) {
+    const tx = data.transactions.find((t) => t.id === linha.id);
+    if (!tx) return;
+    const updated = { ...tx, ultimaConfirmacao: toISODate(new Date()) };
+    persist({ ...data, transactions: data.transactions.map((t) => (t.id === tx.id ? updated : t)) });
+  }
   function handleImportCsv(newRows) {
     const novas = newRows.map((r) => ({
       id: uid(),
@@ -4640,6 +4756,7 @@ export default function App() {
     lancamentos: role === 'vendedor' ? 'Suas vendas' : 'Lançamentos',
     previsao: role === 'vendedor' ? 'Sua previsão' : 'Previsão',
     clientes: 'Clientes',
+    vencimentos: 'Vencimentos',
     categorias: 'Categorias',
     config: 'Configurações',
   };
@@ -4654,6 +4771,7 @@ export default function App() {
       ? 'Sua projeção de vendas, metas e comissão.'
       : 'Projeção financeira e panorama da equipe de vendas.',
     clientes: 'Cadastro de clientes, com busca, filtros e aviso de reajuste de contrato.',
+    vencimentos: 'Relatório de vencimentos por cliente, com urgência por atraso.',
     categorias: 'Categorias de receita e despesa, e os planos negociados.',
     config: 'Aparência, usuários e mural de orientação.',
   };
@@ -4708,6 +4826,9 @@ export default function App() {
         )}
         {page === 'clientes' && (
           <ClientesPage data={data} role={role} persist={persist} askConfirm={askConfirm} />
+        )}
+        {page === 'vencimentos' && role !== 'vendedor' && (
+          <VencimentosPage data={data} onConfirmarRecebimento={confirmarRecebimento} onEditTransaction={openEditTransaction} />
         )}
         {page === 'categorias' && role !== 'vendedor' && (
           <CategoriasPage data={data} persist={persist} askConfirm={askConfirm} />
