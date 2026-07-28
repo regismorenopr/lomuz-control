@@ -104,9 +104,20 @@ create table clientes (
   -- (+1 ano) depois de aplicar o reajuste; o dashboard avisa quando essa data
   -- está a 30 dias ou menos, ou já passou.
   proximo_reajuste date,
+  -- Gestão do reajuste que está por vir: o admin confirma que vai aplicar,
+  -- pode sobrescrever o índice com um percentual ou um valor fixo em reais
+  -- (só um dos dois vale), ou suspender temporariamente.
+  reajuste_confirmado boolean not null default false,
+  reajuste_percentual numeric,
+  reajuste_valor numeric,
+  -- Suspensão é sempre temporária e a data é obrigatória — a constraint abaixo
+  -- impede empurrar mais de 1 ano, senão o reajuste sairia do radar pra sempre.
+  reajuste_suspenso_ate date,
   ativo boolean not null default true,
   observacoes text,
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  constraint reajuste_suspensao_max_1_ano
+    check (reajuste_suspenso_ate is null or reajuste_suspenso_ate <= (current_date + interval '1 year')::date)
 );
 
 -- Planos/serviços vinculados a cada cliente, cada um com seu próprio

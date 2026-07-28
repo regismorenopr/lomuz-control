@@ -236,6 +236,10 @@ function clienteToRow(c) {
     contato_email: c.contatoEmail || null,
     indice_reajuste_id: c.indiceReajusteId || null,
     proximo_reajuste: c.proximoReajuste || null,
+    reajuste_confirmado: !!c.reajusteConfirmado,
+    reajuste_percentual: c.reajustePercentual != null && c.reajustePercentual !== '' ? Number(c.reajustePercentual) : null,
+    reajuste_valor: c.reajusteValor != null && c.reajusteValor !== '' ? Number(c.reajusteValor) : null,
+    reajuste_suspenso_ate: c.reajusteSuspensoAte || null,
     ativo: c.ativo !== false,
     observacoes: c.observacoes || null,
   };
@@ -255,6 +259,10 @@ function rowToCliente(row) {
     contatoEmail: row.contato_email || '',
     indiceReajusteId: row.indice_reajuste_id,
     proximoReajuste: row.proximo_reajuste || null,
+    reajusteConfirmado: !!row.reajuste_confirmado,
+    reajustePercentual: row.reajuste_percentual != null ? Number(row.reajuste_percentual) : null,
+    reajusteValor: row.reajuste_valor != null ? Number(row.reajuste_valor) : null,
+    reajusteSuspensoAte: row.reajuste_suspenso_ate || null,
     ativo: row.ativo !== false,
     observacoes: row.observacoes || '',
   };
@@ -665,7 +673,12 @@ function clientesComReajustePendente(clientes, diasJanela = 30) {
   const hojeISO = toISODate(new Date());
   const limiteISO = toISODate(addDays(new Date(), diasJanela));
   return (clientes || [])
-    .filter((c) => c.ativo !== false && c.proximoReajuste && c.proximoReajuste <= limiteISO)
+    .filter((c) => {
+      if (c.ativo === false || !c.proximoReajuste) return false;
+      // Suspensão vencida volta a avisar sozinha — não precisa o admin reativar.
+      if (c.reajusteSuspensoAte && c.reajusteSuspensoAte >= hojeISO) return false;
+      return c.proximoReajuste <= limiteISO;
+    })
     .map((c) => ({ ...c, atrasado: c.proximoReajuste < hojeISO }))
     .sort((a, b) => a.proximoReajuste.localeCompare(b.proximoReajuste));
 }
@@ -831,7 +844,7 @@ const iconBtnStyle = {
   width: 30, height: 30, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)',
   display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--ink-soft)', flexShrink: 0,
 };
-const thStyle = { textAlign: 'left', padding: '8px 10px', fontWeight: 700, color: 'var(--ink-soft)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontSize: 11.5 };
+const thStyle = { textAlign: 'left', padding: '8px 10px', fontWeight: 700, color: 'var(--ink-soft)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontSize: 'var(--fs-small)' };
 const tdStyle = { padding: '8px 10px', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
 
 // Os tokens visuais (cores, raios, sombras, grades e responsividade) ficam
@@ -843,7 +856,7 @@ const tdStyle = { padding: '8px 10px', borderBottom: '1px solid var(--border)', 
 
 function Card({ children, style }) {
   return (
-    <div style={{ background: 'var(--surface)', borderRadius: 16, padding: 16, boxShadow: '0 1px 2px rgba(19,37,31,0.06)', border: '1px solid var(--border)', ...style }}>
+    <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', padding: 16, boxShadow: 'var(--shadow-sm)', border: '1px solid var(--border)', ...style }}>
       {children}
     </div>
   );
@@ -854,10 +867,10 @@ function Chip({ active, onClick, children }) {
     <button
       onClick={onClick}
       style={{
-        padding: '7px 14px', borderRadius: 999, fontSize: 13, fontWeight: 600, flexShrink: 0,
+        padding: '7px 14px', borderRadius: 'var(--radius-pill)', fontSize: 'var(--fs-body)', fontWeight: 600, flexShrink: 0,
         border: active ? '1px solid var(--brand)' : '1px solid var(--border)',
         background: active ? 'var(--brand)' : 'var(--surface)',
-        color: active ? '#fff' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap',
+        color: active ? 'var(--on-primary)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap',
       }}
     >
       {children}
@@ -866,11 +879,11 @@ function Chip({ active, onClick, children }) {
 }
 
 function Button({ variant = 'primary', children, style, ...props }) {
-  const base = { padding: '12px 16px', borderRadius: 12, fontWeight: 700, fontSize: 14, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 };
+  const base = { padding: '12px 16px', borderRadius: 'var(--radius)', fontWeight: 700, fontSize: 'var(--fs-base)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 };
   const variants = {
-    primary: { background: 'var(--brand)', color: '#fff' },
+    primary: { background: 'var(--brand)', color: 'var(--on-primary)' },
     secondary: { background: 'var(--surface-2)', color: 'var(--ink)' },
-    danger: { background: 'var(--negative)', color: '#fff' },
+    danger: { background: 'var(--negative)', color: 'var(--on-primary)' },
     ghost: { background: 'transparent', color: 'var(--ink-soft)' },
   };
   return <button style={{ ...base, ...variants[variant], ...style }} {...props}>{children}</button>;
@@ -879,9 +892,9 @@ function Button({ variant = 'primary', children, style, ...props }) {
 function Field({ label, children, hint }) {
   return (
     <label style={{ display: 'block', marginBottom: 14 }}>
-      <span style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: 'var(--ink-soft)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</span>
+      <span style={{ display: 'block', fontSize: 'var(--fs-micro)', fontWeight: 700, color: 'var(--ink-soft)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</span>
       {children}
-      {hint && <span style={{ display: 'block', fontSize: 12, color: 'var(--ink-soft)', marginTop: 5 }}>{hint}</span>}
+      {hint && <span style={{ display: 'block', fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', marginTop: 5, lineHeight: 1.5 }}>{hint}</span>}
     </label>
   );
 }
@@ -912,8 +925,8 @@ function EmptyState({ icon: Icon, title, desc, actionLabel, onAction }) {
       <div style={{ width: 52, height: 52, borderRadius: '50%', background: 'var(--brand-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}>
         <Icon size={22} color="var(--primary-text)" />
       </div>
-      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6 }}>{title}</div>
-      <div style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: actionLabel ? 18 : 0, lineHeight: 1.5 }}>{desc}</div>
+      <div style={{ fontWeight: 700, fontSize: 'var(--fs-title)', marginBottom: 6 }}>{title}</div>
+      <div style={{ fontSize: 'var(--fs-body)', color: 'var(--ink-soft)', marginBottom: actionLabel ? 18 : 0, lineHeight: 1.6 }}>{desc}</div>
       {actionLabel && <Button variant="primary" onClick={onAction} style={{ display: 'inline-flex' }}>{actionLabel}</Button>}
     </Card>
   );
@@ -922,11 +935,11 @@ function EmptyState({ icon: Icon, title, desc, actionLabel, onAction }) {
 function SectionTitle({ icon: Icon, children, action }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '22px 0 10px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 700, fontSize: 13.5, color: 'var(--ink-soft)' }}>
-        {Icon && <Icon size={15} />} {children}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 700, fontSize: 'var(--fs-base)', color: 'var(--ink)', letterSpacing: '-0.01em' }}>
+        {Icon && <Icon size={15} style={{ color: 'var(--ink-soft)' }} />} {children}
       </div>
       {action && (
-        <button onClick={action.onClick} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 2 }}>
+        <button onClick={action.onClick} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 'var(--fs-small)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 2 }}>
           {action.label} <ChevronRight size={13} />
         </button>
       )}
@@ -943,7 +956,7 @@ function OptionCard({ active, title, desc, onClick, children }) {
         </div>
         <div style={{ fontWeight: 700, fontSize: 14 }}>{title}</div>
       </div>
-      <div style={{ fontSize: 12.5, color: 'var(--ink-soft)', marginLeft: 28, marginTop: 4, lineHeight: 1.4 }}>{desc}</div>
+      <div style={{ fontSize: 'var(--fs-body)', color: 'var(--ink-soft)', marginLeft: 28, marginTop: 4, lineHeight: 1.4 }}>{desc}</div>
       {children}
     </div>
   );
@@ -962,8 +975,8 @@ function QuickAddButton({ icon: Icon, label, desc, onClick }) {
         <Icon size={19} color="var(--primary-text)" />
       </span>
       <span style={{ minWidth: 0 }}>
-        <span style={{ display: 'block', fontWeight: 700, fontSize: 14.5 }}>{label}</span>
-        <span style={{ display: 'block', fontSize: 12.5, color: 'var(--ink-soft)', marginTop: 2 }}>{desc}</span>
+        <span style={{ display: 'block', fontWeight: 700, fontSize: 'var(--fs-title)' }}>{label}</span>
+        <span style={{ display: 'block', fontSize: 'var(--fs-body)', color: 'var(--ink-soft)', marginTop: 2 }}>{desc}</span>
       </span>
     </button>
   );
@@ -971,13 +984,13 @@ function QuickAddButton({ icon: Icon, label, desc, onClick }) {
 
 function Modal({ title, onClose, children }) {
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(19,37,31,0.45)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 50 }}>
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'var(--overlay-scrim)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 50 }}>
       <div
         onClick={(e) => e.stopPropagation()}
         style={{ background: 'var(--surface)', width: '100%', maxWidth: 480, borderRadius: '20px 20px 0 0', maxHeight: '88vh', overflowY: 'auto', padding: 20, animation: 'lomuzSlideUp .22s ease-out' }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <h2 className="lomuz-display" style={{ fontSize: 19, margin: 0, fontWeight: 600 }}>{title}</h2>
+          <h2 className="lomuz-display" style={{ fontSize: 'var(--fs-lg)', margin: 0, fontWeight: 700 }}>{title}</h2>
           <button onClick={onClose} style={{ background: 'var(--surface-2)', border: 'none', borderRadius: '50%', width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
             <X size={17} />
           </button>
@@ -1040,8 +1053,8 @@ function CategoryRow({ cat, last, onEdit, onDelete }) {
         <Icon size={16} color={cat.cor} />
       </div>
       <div style={{ flex: 1, fontWeight: 600, fontSize: 14, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cat.nome}</div>
-      <button onClick={onEdit} style={iconBtnStyle}><Edit2 size={14} /></button>
-      <button onClick={onDelete} style={iconBtnStyle}><Trash2 size={14} /></button>
+      <button onClick={onEdit} style={iconBtnStyle}><Edit2 size={15} /></button>
+      <button onClick={onDelete} style={iconBtnStyle}><Trash2 size={15} /></button>
     </div>
   );
 }
@@ -1131,11 +1144,11 @@ function RangePeriodSelector({ mode, setMode, customFrom, setCustomFrom, customT
       {mode === 'custom' && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
           <label style={{ flex: 1, minWidth: 120 }}>
-            <span style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: 'var(--ink-soft)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.4 }}>De</span>
+            <span style={{ display: 'block', fontSize: 'var(--fs-small)', fontWeight: 700, color: 'var(--ink-soft)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.4 }}>De</span>
             <input type="month" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} style={inputStyle} />
           </label>
           <label style={{ flex: 1, minWidth: 120 }}>
-            <span style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: 'var(--ink-soft)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.4 }}>Até</span>
+            <span style={{ display: 'block', fontSize: 'var(--fs-small)', fontWeight: 700, color: 'var(--ink-soft)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.4 }}>Até</span>
             <input type="month" value={customTo} onChange={(e) => setCustomTo(e.target.value)} style={inputStyle} />
           </label>
         </div>
@@ -1154,7 +1167,7 @@ function MetaCurrencyField({ value, onCommit }) {
       value={local}
       onChange={setLocal}
       onBlur={() => onCommit(local)}
-      style={{ ...inputStyle, padding: '3px 6px', fontSize: 11.5, width: 104 }}
+      style={{ ...inputStyle, padding: '3px 6px', fontSize: 'var(--fs-small)', width: 104 }}
     />
   );
 }
@@ -1175,7 +1188,7 @@ function VendedorPanoramaView({ vendedor, rows, isTeam, vendedoresCount, onEditM
   return (
     <div>
       <Card style={{ background: 'var(--sidebar)', color: '#fff', border: 'none', marginBottom: 16 }}>
-        <div style={{ fontSize: 11.5, opacity: 0.7, textTransform: 'uppercase', fontWeight: 700 }}>
+        <div style={{ fontSize: 'var(--fs-small)', opacity: 0.7, textTransform: 'uppercase', fontWeight: 700 }}>
           {isTeam ? `Equipe toda · ${vendedoresCount} vendedor(es)` : `${vendedor.nome} · comissão ${vendedor.comissaoPercentual}%`}
         </div>
         <div style={{ display: 'flex', gap: 24, marginTop: 10, flexWrap: 'wrap' }}>
@@ -1212,7 +1225,7 @@ function VendedorPanoramaView({ vendedor, rows, isTeam, vendedoresCount, onEditM
               <span style={{ color: pct == null ? 'var(--ink-soft)' : accent }}>{pct != null ? `${pct}%` : 'sem meta'}</span>
             </div>
             {pct != null && <ProgressBar pct={Math.min(150, pct)} />}
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: 'var(--ink-soft)', marginTop: 6, flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', marginTop: 6, flexWrap: 'wrap', gap: 8 }}>
               <span>Vendido: {formatCurrency(r.vendas)}</span>
               {onEditMeta ? (
                 <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -1310,7 +1323,7 @@ function MuralCard({ orientacoes, role, onEdit }) {
           </Card>
         ))
       )}
-      {erro && <div style={{ color: 'var(--negative)', fontSize: 12.5, fontWeight: 600, marginTop: 8 }}>{erro}</div>}
+      {erro && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', fontWeight: 600, marginTop: 8 }}>{erro}</div>}
     </>
   );
 }
@@ -1403,7 +1416,7 @@ function MuralAdminModal({ orientacoes, persistOrientacoes, askConfirm }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
             {anexos.map((a) => (
               <div key={a.path} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, background: 'var(--surface-2)', borderRadius: 10, padding: '8px 10px' }}>
-                <span style={{ fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                <span style={{ fontSize: 'var(--fs-body)', display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                   <FileText size={13} style={{ flexShrink: 0 }} />
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.nome}</span>
                 </span>
@@ -1421,7 +1434,7 @@ function MuralAdminModal({ orientacoes, persistOrientacoes, askConfirm }) {
           <Toggle checked={fixado} onChange={setFixado} />
         </div>
 
-        {erro && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{erro}</div>}
+        {erro && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', marginBottom: 10, fontWeight: 600 }}>{erro}</div>}
         <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
           <Button variant="secondary" onClick={() => setEditando(null)} style={{ flex: 1 }}>Voltar</Button>
           <Button variant="primary" onClick={salvar} style={{ flex: 2 }} disabled={enviando}>Salvar recado</Button>
@@ -1662,12 +1675,12 @@ function TransactionForm({ draft, categories, role, vendedores, planos, onSubmit
         </div>
       )}
 
-      {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginTop: 12, fontWeight: 600 }}>{error}</div>}
+      {error && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', marginTop: 12, fontWeight: 600 }}>{error}</div>}
 
       {emRevisao ? (
         <>
           <Card style={{ marginTop: 16, borderColor: 'var(--warning)', background: 'var(--warning-light)' }}>
-            <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.5, color: 'var(--warning-strong)' }}>
+            <p style={{ margin: 0, fontSize: 'var(--fs-body)', lineHeight: 1.5, color: 'var(--warning-strong)' }}>
               Esta venda foi lançada por um vendedor e está aguardando sua revisão. Ajuste o que precisar acima e depois aprove — só assim ela passa a contar no saldo, nas metas e na comissão.
             </p>
           </Card>
@@ -1679,7 +1692,7 @@ function TransactionForm({ draft, categories, role, vendedores, planos, onSubmit
           </div>
           <button
             onClick={submit}
-            style={{ width: '100%', marginTop: 10, background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', padding: 8 }}
+            style={{ width: '100%', marginTop: 10, background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: 'var(--fs-body)', fontWeight: 700, cursor: 'pointer', padding: 8 }}
           >
             Salvar alterações sem aprovar
           </button>
@@ -1703,7 +1716,7 @@ function TransactionForm({ draft, categories, role, vendedores, planos, onSubmit
       {onCancelRecurrence && (
         <button
           onClick={onCancelRecurrence}
-          style={{ width: '100%', marginTop: 4, background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 8 }}
+          style={{ width: '100%', marginTop: 4, background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: 'var(--fs-body)', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 8 }}
         >
           <X size={13} /> Cancelar recorrência (mantém histórico)
         </button>
@@ -1803,7 +1816,7 @@ function CancelRecurrenceStep({ onBack, onConfirm }) {
           style={inputStyle}
         />
       </Field>
-      {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginTop: 4, fontWeight: 600 }}>{error}</div>}
+      {error && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', marginTop: 4, fontWeight: 600 }}>{error}</div>}
       <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
         <Button variant="secondary" onClick={onBack} style={{ flex: 1 }}>Voltar</Button>
         <Button variant="primary" onClick={confirm} style={{ flex: 2 }}>Confirmar cancelamento</Button>
@@ -1857,7 +1870,7 @@ function CategoryForm({ cat, onSubmit, onCancel }) {
           ))}
         </div>
       </Field>
-      {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{error}</div>}
+      {error && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', marginBottom: 10, fontWeight: 600 }}>{error}</div>}
       <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
         <Button variant="secondary" onClick={onCancel} style={{ flex: 1 }}>Cancelar</Button>
         <Button variant="primary" onClick={submit} style={{ flex: 2 }}>Salvar categoria</Button>
@@ -1912,7 +1925,7 @@ function VendedorForm({ vendedor, onSubmit, onCancel }) {
         </div>
         <Toggle checked={ativo} onChange={setAtivo} />
       </div>
-      {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{error}</div>}
+      {error && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', marginBottom: 10, fontWeight: 600 }}>{error}</div>}
       <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
         <Button variant="secondary" onClick={onCancel} style={{ flex: 1 }}>Cancelar</Button>
         <Button variant="primary" onClick={submit} style={{ flex: 2 }}>Salvar</Button>
@@ -2085,11 +2098,11 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
             {aguardandoRevisao.slice(0, 5).map((t) => {
               const vend = data.vendedores.find((v) => v.id === t.vendedorId);
               return (
-                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, color: 'var(--warning-strong)', gap: 8 }}>
+                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-body)', color: 'var(--warning-strong)', gap: 8 }}>
                   <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {vend?.nome || 'Vendedor'} · {t.clienteNome || 'sem cliente'} · {formatCurrency(t.valor)}
                   </span>
-                  <button onClick={() => onReviewSale(t)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 11.5, cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
+                  <button onClick={() => onReviewSale(t)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 'var(--fs-small)', cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
                     Revisar
                   </button>
                 </div>
@@ -2192,12 +2205,12 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
             {pendentes.slice(0, 4).map((t) => {
               const c = data.categories.find((cc) => cc.id === t.categoriaId);
               return (
-                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, color: 'var(--warning-strong)', gap: 8 }}>
+                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-body)', color: 'var(--warning-strong)', gap: 8 }}>
                   <span>{c?.nome} · {formatCurrency(t.valor)} · ativa em {daysUntil(t.dataAtivacao)} dia(s)</span>
                   {/* Só admin ativa antes do prazo — muitos produtos têm período de
                       teste e o vendedor não deve poder pular essa validação. */}
                   {role === 'admin' && (
-                    <button onClick={() => onActivateNow(t)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 11.5, cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
+                    <button onClick={() => onActivateNow(t)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 'var(--fs-small)', cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
                       Ativar agora
                     </button>
                   )}
@@ -2254,14 +2267,14 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
               {proximosVencimentos.slice(0, 8).map((v) => (
                 <div key={`${v.id}-${v.data}`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', borderBottom: '1px solid var(--border)' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <div style={{ fontWeight: 600, fontSize: 'var(--fs-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {v.clienteNome || v.descricao || (v.tipo === 'receita' ? 'Receita' : 'Despesa')}
                     </div>
-                    <div style={{ fontSize: 11.5, color: v.atrasado ? 'var(--negative)' : 'var(--ink-soft)', fontWeight: v.atrasado ? 700 : 400 }}>
+                    <div style={{ fontSize: 'var(--fs-small)', color: v.atrasado ? 'var(--negative)' : 'var(--ink-soft)', fontWeight: v.atrasado ? 700 : 400 }}>
                       {formatDateBR(v.data)}{v.recorrente ? ' · recorrente' : ''}{v.atrasado ? ' · atrasado' : ''}
                     </div>
                   </div>
-                  <div style={{ fontWeight: 700, fontSize: 13.5, color: v.tipo === 'receita' ? 'var(--success)' : 'var(--negative)', whiteSpace: 'nowrap' }}>
+                  <div style={{ fontWeight: 700, fontSize: 'var(--fs-body)', color: v.tipo === 'receita' ? 'var(--success)' : 'var(--negative)', whiteSpace: 'nowrap' }}>
                     {formatCurrency(v.valor)}
                   </div>
                 </div>
@@ -2344,7 +2357,7 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.nome}{r.id === currentVendedorId ? ' (você)' : ''}</div>
-                    <div style={{ fontSize: 11.5, color: 'var(--ink-soft)' }}>Comissão {formatCurrency(r.comissao)}</div>
+                    <div style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)' }}>Comissão {formatCurrency(r.comissao)}</div>
                   </div>
                   <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--positive)', whiteSpace: 'nowrap' }}>{formatCurrency(r.vendas)}</div>
                 </div>
@@ -2394,12 +2407,12 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
                       <div>
                         <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)' }}>Receita</div>
                         <div style={{ fontWeight: 700, fontSize: 20, color: 'var(--positive)', margin: '4px 0 2px' }}>{formatCurrency(ticketMedioReceita)}</div>
-                        <div style={{ fontSize: 11.5, color: 'var(--ink-soft)' }}>{receitas.count} lançamento(s)</div>
+                        <div style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)' }}>{receitas.count} lançamento(s)</div>
                       </div>
                       <div>
                         <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)' }}>Despesa</div>
                         <div style={{ fontWeight: 700, fontSize: 20, color: 'var(--negative)', margin: '4px 0 2px' }}>{formatCurrency(ticketMedioDespesa)}</div>
-                        <div style={{ fontSize: 11.5, color: 'var(--ink-soft)' }}>{despesas.count} lançamento(s)</div>
+                        <div style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)' }}>{despesas.count} lançamento(s)</div>
                       </div>
                     </div>
                   </Card>
@@ -2411,7 +2424,7 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
                   <SectionTitle icon={TrendingUp}>Evolução da empresa</SectionTitle>
                   <Card>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <div style={{ fontSize: 11.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)' }}>Receita x despesa · 6 meses</div>
+                      <div style={{ fontSize: 'var(--fs-small)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)' }}>Receita x despesa · 6 meses</div>
                       {growthPct !== null && (
                         <div style={{ fontSize: 12, fontWeight: 700, color: growthPct >= 0 ? 'var(--positive)' : 'var(--negative)', display: 'flex', alignItems: 'center', gap: 3 }}>
                           {growthPct >= 0 ? '↑' : '↓'} {Math.abs(growthPct)}% vs mês passado
@@ -2450,7 +2463,7 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
                           </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.nome}</div>
-                            <div style={{ fontSize: 11.5, color: 'var(--ink-soft)' }}>Comissão {formatCurrency(r.comissao)}</div>
+                            <div style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)' }}>Comissão {formatCurrency(r.comissao)}</div>
                           </div>
                           <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--positive)', whiteSpace: 'nowrap' }}>{formatCurrency(r.vendas)}</div>
                         </div>
@@ -2553,52 +2566,33 @@ function LancamentosPage({ data, role, currentVendedorId, onEdit, onImportClick 
       {role === 'admin' && (
         <button
           onClick={onImportClick}
-          style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 12.5, cursor: 'pointer', padding: '0 0 10px' }}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 'var(--fs-body)', cursor: 'pointer', padding: '0 0 10px' }}
         >
           <Upload size={14} /> Importar CSV (Asaas ou outro)
         </button>
       )}
 
-      <div style={{ position: 'relative', marginBottom: 10 }}>
-        <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--ink-soft)', pointerEvents: 'none' }} />
-        <input
-          type="text"
-          value={busca}
-          onChange={(e) => setBusca(e.target.value)}
-          placeholder="Buscar por cliente, descrição ou categoria…"
-          style={{ ...inputStyle, paddingLeft: 34 }}
-        />
-      </div>
+      <SearchInput value={busca} onChange={setBusca} placeholder="Buscar por cliente, descrição ou categoria…" />
 
-      <div style={{ marginBottom: 10 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)', marginBottom: 6 }}>Tipo</div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Chip active={filterTipo === 'todos'} onClick={() => { setFilterTipo('todos'); setFilterCat('todas'); }}>Todos</Chip>
-          <Chip active={filterTipo === 'receita'} onClick={() => { setFilterTipo('receita'); setFilterCat('todas'); }}>Receitas</Chip>
-          <Chip active={filterTipo === 'despesa'} onClick={() => { setFilterTipo('despesa'); setFilterCat('todas'); }}>Despesas</Chip>
-        </div>
-      </div>
+      <FilterGroup label="Tipo">
+        <Chip active={filterTipo === 'todos'} onClick={() => { setFilterTipo('todos'); setFilterCat('todas'); }}>Todos</Chip>
+        <Chip active={filterTipo === 'receita'} onClick={() => { setFilterTipo('receita'); setFilterCat('todas'); }}>Receitas</Chip>
+        <Chip active={filterTipo === 'despesa'} onClick={() => { setFilterTipo('despesa'); setFilterCat('todas'); }}>Despesas</Chip>
+      </FilterGroup>
 
-      <div style={{ marginBottom: 10 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)', marginBottom: 6 }}>Período</div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Chip active={filterPeriodo === 'todos'} onClick={() => setFilterPeriodo('todos')}>Todo o período</Chip>
-          <Chip active={filterPeriodo === 'mes_atual'} onClick={() => setFilterPeriodo('mes_atual')}>Este mês</Chip>
-          <Chip active={filterPeriodo === 'ultimos_3'} onClick={() => setFilterPeriodo('ultimos_3')}>Últimos 3 meses</Chip>
-          <Chip active={filterPeriodo === 'ano_atual'} onClick={() => setFilterPeriodo('ano_atual')}>Este ano</Chip>
-        </div>
-      </div>
+      <FilterGroup label="Período">
+        <Chip active={filterPeriodo === 'todos'} onClick={() => setFilterPeriodo('todos')}>Todo o período</Chip>
+        <Chip active={filterPeriodo === 'mes_atual'} onClick={() => setFilterPeriodo('mes_atual')}>Este mês</Chip>
+        <Chip active={filterPeriodo === 'ultimos_3'} onClick={() => setFilterPeriodo('ultimos_3')}>Últimos 3 meses</Chip>
+        <Chip active={filterPeriodo === 'ano_atual'} onClick={() => setFilterPeriodo('ano_atual')}>Este ano</Chip>
+      </FilterGroup>
 
-      <div style={{ marginBottom: 10 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)', marginBottom: 6 }}>Recorrência</div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Chip active={filterRecorrente === 'todos'} onClick={() => setFilterRecorrente('todos')}>Todos</Chip>
-          <Chip active={filterRecorrente === 'somente'} onClick={() => setFilterRecorrente('somente')}>Somente recorrentes</Chip>
-        </div>
-      </div>
+      <FilterGroup label="Recorrência">
+        <Chip active={filterRecorrente === 'todos'} onClick={() => setFilterRecorrente('todos')}>Todos</Chip>
+        <Chip active={filterRecorrente === 'somente'} onClick={() => setFilterRecorrente('somente')}>Somente recorrentes</Chip>
+      </FilterGroup>
 
-      <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)', marginBottom: 6 }}>Categoria</div>
+      <FilterGroup label="Categoria">
         <select value={filterCat} onChange={(e) => setFilterCat(e.target.value)} style={inputStyle}>
           <option value="todas">Todas as categorias{filterTipo !== 'todos' ? ` de ${filterTipo === 'receita' ? 'receita' : 'despesa'}` : ''}</option>
           {filterTipo === 'todos' ? (
@@ -2614,7 +2608,7 @@ function LancamentosPage({ data, role, currentVendedorId, onEdit, onImportClick 
             data.categories.filter((c) => c.tipo === filterTipo).map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)
           )}
         </select>
-      </div>
+      </FilterGroup>
 
       {list.length === 0 ? (
         <EmptyState icon={Receipt} title="Nada por aqui ainda" desc="Toque no botão + para registrar sua primeira receita ou despesa, ou ajuste os filtros acima." />
@@ -2628,7 +2622,7 @@ function LancamentosPage({ data, role, currentVendedorId, onEdit, onImportClick 
 
           <div style={{ marginTop: 14, marginBottom: 24 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: 0.4 }}>Total do filtro</span>
+              <span style={{ fontSize: 'var(--fs-small)', fontWeight: 700, color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: 0.4 }}>Total do filtro</span>
               <div style={{ display: 'flex', gap: 6 }}>
                 <Chip active={totalsMode === 'geral'} onClick={() => setTotalsMode('geral')}>Total geral</Chip>
                 <Chip active={totalsMode === 'mensal'} onClick={() => setTotalsMode('mensal')}>Por mês</Chip>
@@ -2758,14 +2752,14 @@ function ImportCsvModal({ categories, onImport, onClose }) {
             <span style={{ fontSize: 13, fontWeight: 700 }}>Escolher arquivo CSV</span>
             <input type="file" accept=".csv,text/csv" onChange={handleFile} style={{ display: 'none' }} />
           </label>
-          {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginTop: 12, fontWeight: 600 }}>{error}</div>}
+          {error && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', marginTop: 12, fontWeight: 600 }}>{error}</div>}
           <Button variant="secondary" onClick={onClose} style={{ width: '100%', marginTop: 20 }}>Cancelar</Button>
         </div>
       )}
 
       {step === 'mapping' && (
         <div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-soft)', marginBottom: 12 }}>{fileName} · {rows.length} linha(s) encontrada(s)</div>
+          <div style={{ fontSize: 'var(--fs-body)', color: 'var(--ink-soft)', marginBottom: 12 }}>{fileName} · {rows.length} linha(s) encontrada(s)</div>
 
           <Field label="Coluna de data">
             <select value={colData} onChange={(e) => setColData(e.target.value)} style={inputStyle}>
@@ -2807,7 +2801,7 @@ function ImportCsvModal({ categories, onImport, onClose }) {
           </Field>
 
           <div style={{ background: 'var(--surface-2)', borderRadius: 12, padding: 12, marginBottom: 4 }}>
-            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>
+            <div style={{ fontSize: 'var(--fs-body)', fontWeight: 700, marginBottom: 6 }}>
               {validRows.length} lançamento(s) prontos para importar
               {invalidCount > 0 && <span style={{ color: 'var(--negative)', fontWeight: 600 }}> · {invalidCount} ignorado(s) (data ou valor inválido)</span>}
             </div>
@@ -2817,10 +2811,10 @@ function ImportCsvModal({ categories, onImport, onClose }) {
                 <span>{formatCurrency(r.valor)}</span>
               </div>
             ))}
-            {validRows.length > 4 && <div style={{ fontSize: 11.5, color: 'var(--ink-soft)' }}>+ {validRows.length - 4} outro(s)…</div>}
+            {validRows.length > 4 && <div style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)' }}>+ {validRows.length - 4} outro(s)…</div>}
           </div>
 
-          {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginTop: 12, fontWeight: 600 }}>{error}</div>}
+          {error && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', marginTop: 12, fontWeight: 600 }}>{error}</div>}
 
           <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
             <Button variant="secondary" onClick={onClose} style={{ flex: 1 }}>Cancelar</Button>
@@ -2883,7 +2877,7 @@ function CategoryForecast({ data, selectedCats, setSelectedCats, periodMode, set
 
           <SectionTitle icon={Calendar}>Detalhe mês a mês</SectionTitle>
           <Card style={{ padding: 0, overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--fs-body)' }}>
               <thead>
                 <tr>
                   <th style={thStyle}>Mês</th>
@@ -2985,7 +2979,7 @@ function EquipeForecast({ data, persist, askConfirm }) {
   return (
     <div>
       {inviteStatus && (
-        <div style={{ fontSize: 12.5, color: 'var(--primary-text)', fontWeight: 600, marginBottom: 10 }}>{inviteStatus}</div>
+        <div style={{ fontSize: 'var(--fs-body)', color: 'var(--primary-text)', fontWeight: 600, marginBottom: 10 }}>{inviteStatus}</div>
       )}
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
         <Button variant="secondary" onClick={() => { setEditing(null); setShowForm(true); }} style={{ fontSize: 13, padding: '8px 12px' }}>
@@ -3240,7 +3234,7 @@ function PlanoForm({ plano, categories, servicos, onSubmit, onCancel }) {
         <Toggle checked={ativo} onChange={setAtivo} />
       </div>
 
-      {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{error}</div>}
+      {error && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', marginBottom: 10, fontWeight: 600 }}>{error}</div>}
       <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
         <Button variant="secondary" onClick={onCancel} style={{ flex: 1 }}>Cancelar</Button>
         <Button variant="primary" onClick={submit} style={{ flex: 2 }}>Salvar plano</Button>
@@ -3266,6 +3260,41 @@ function CadastrosTabNav({ subTab, setSubTab }) {
   );
 }
 
+// Cabeçalho padrão das páginas de cadastro: explicação curta à esquerda e a
+// ação principal à direita, sempre no topo. Antes o botão "Novo" existia só
+// no fim da lista — numa lista de 57 categorias ele ficava invisível.
+function PageToolbar({ desc, actionLabel, onAction }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
+      <p style={{ fontSize: 'var(--fs-body)', color: 'var(--ink-soft)', margin: 0, lineHeight: 1.6, flex: '1 1 280px', minWidth: 0 }}>{desc}</p>
+      {actionLabel && (
+        <Button variant="primary" onClick={onAction} style={{ flexShrink: 0 }}>
+          <Plus size={16} /> {actionLabel}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function SearchInput({ value, onChange, placeholder }) {
+  return (
+    <div style={{ position: 'relative', marginBottom: 12 }}>
+      <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--ink-soft)', pointerEvents: 'none' }} />
+      <input type="text" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} style={{ ...inputStyle, paddingLeft: 34 }} />
+    </div>
+  );
+}
+
+// Rótulo de grupo de filtro — mesmo estilo em todas as páginas de lista.
+function FilterGroup({ label, children }) {
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ fontSize: 'var(--fs-micro)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)', marginBottom: 6 }}>{label}</div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>{children}</div>
+    </div>
+  );
+}
+
 // Aba genérica de cadastro simples (serviços, ramos de negócio, índices de
 // reajuste) — mesma estrutura de lista + formulário das categorias/planos,
 // mas com um Form específico por tipo já que os campos mudam.
@@ -3277,10 +3306,10 @@ function CadastroSimplesTab({ subTab, setSubTab, config, onSave, onRemove }) {
   return (
     <div style={{ paddingTop: 12 }}>
       <CadastrosTabNav subTab={subTab} setSubTab={setSubTab} />
-      <p style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 14, lineHeight: 1.5 }}>{desc}</p>
+      <PageToolbar desc={desc} actionLabel={config.novoLabel || 'Novo'} onAction={() => { setEditing(null); setShowForm(true); }} />
 
       {itens.length === 0 ? (
-        <EmptyState icon={Tag} title={titulo} desc="Toque no botão abaixo para criar o primeiro." actionLabel="+ Novo" onAction={() => { setEditing(null); setShowForm(true); }} />
+        <EmptyState icon={Tag} title={titulo} desc="Use o botão acima para criar o primeiro." actionLabel="+ Novo" onAction={() => { setEditing(null); setShowForm(true); }} />
       ) : (
         <Card style={{ padding: 0 }}>
           {itens.map((item, i) => {
@@ -3348,7 +3377,7 @@ function ServicoForm({ item, onSubmit, onCancel }) {
         </div>
         <Toggle checked={ativo} onChange={setAtivo} />
       </div>
-      {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{error}</div>}
+      {error && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', marginBottom: 10, fontWeight: 600 }}>{error}</div>}
       <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
         <Button variant="secondary" onClick={onCancel} style={{ flex: 1 }}>Cancelar</Button>
         <Button variant="primary" onClick={submit} style={{ flex: 2 }}>Salvar serviço</Button>
@@ -3369,7 +3398,7 @@ function RamoForm({ item, onSubmit, onCancel }) {
   return (
     <div>
       <Field label="Nome do ramo de negócio"><input type="text" style={inputStyle} value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex.: Comércio varejista" /></Field>
-      {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{error}</div>}
+      {error && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', marginBottom: 10, fontWeight: 600 }}>{error}</div>}
       <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
         <Button variant="secondary" onClick={onCancel} style={{ flex: 1 }}>Cancelar</Button>
         <Button variant="primary" onClick={submit} style={{ flex: 2 }}>Salvar ramo</Button>
@@ -3394,7 +3423,7 @@ function IndiceForm({ item, onSubmit, onCancel }) {
       <Field label="Descrição (opcional)">
         <textarea rows={3} style={{ ...inputStyle, resize: 'vertical' }} value={descricao} onChange={(e) => setDescricao(e.target.value)} placeholder="De onde vem, quando costuma ser usado..." />
       </Field>
-      {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{error}</div>}
+      {error && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', marginBottom: 10, fontWeight: 600 }}>{error}</div>}
       <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
         <Button variant="secondary" onClick={onCancel} style={{ flex: 1 }}>Cancelar</Button>
         <Button variant="primary" onClick={submit} style={{ flex: 2 }}>Salvar índice</Button>
@@ -3409,6 +3438,8 @@ function CategoriasPage({ data, persist, askConfirm }) {
   const [editing, setEditing] = useState(null);
   const [showPlanoForm, setShowPlanoForm] = useState(false);
   const [editingPlano, setEditingPlano] = useState(null);
+  const [buscaCat, setBuscaCat] = useState('');
+  const [filtroTipoCat, setFiltroTipoCat] = useState('todas');
 
   const receitaCats = data.categories.filter((c) => c.tipo === 'receita');
   const despesaCats = data.categories.filter((c) => c.tipo === 'despesa');
@@ -3456,9 +3487,11 @@ function CategoriasPage({ data, persist, askConfirm }) {
     return (
       <div style={{ paddingTop: 12 }}>
         <CadastrosTabNav subTab={subTab} setSubTab={setSubTab} />
-        <p style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 14, lineHeight: 1.5 }}>
-          Cadastre aqui os planos com preço e comissão já definidos. Quando o vendedor escolher um plano ao lançar a venda, os campos vêm preenchidos — e você pode ajustar qualquer coisa antes de aprovar.
-        </p>
+        <PageToolbar
+          desc="Planos com preço e comissão já definidos. Quando o vendedor escolhe um plano ao lançar a venda, os campos vêm preenchidos — e você ainda pode ajustar antes de aprovar."
+          actionLabel="Novo plano"
+          onAction={() => { setEditingPlano(null); setShowPlanoForm(true); }}
+        />
 
         {planos.length === 0 ? (
           <EmptyState icon={Tag} title="Nenhum plano cadastrado" desc="Crie planos com preço e comissão pré-definidos para agilizar o lançamento das vendas." actionLabel="+ Novo plano" onAction={() => { setEditingPlano(null); setShowPlanoForm(true); }} />
@@ -3489,12 +3522,6 @@ function CategoriasPage({ data, persist, askConfirm }) {
               );
             })}
           </Card>
-        )}
-
-        {planos.length > 0 && (
-          <Button variant="primary" onClick={() => { setEditingPlano(null); setShowPlanoForm(true); }} style={{ width: '100%', marginTop: 16 }}>
-            <Plus size={16} /> Novo plano
-          </Button>
         )}
 
         {showPlanoForm && (
@@ -3539,28 +3566,61 @@ function CategoriasPage({ data, persist, askConfirm }) {
     );
   }
 
+  const termo = buscaCat.trim().toLowerCase();
+  const filtra = (list) => (termo ? list.filter((c) => c.nome.toLowerCase().includes(termo)) : list);
+  const receitasFiltradas = filtra(receitaCats);
+  const despesasFiltradas = filtra(despesaCats);
+  const mostraReceitas = filtroTipoCat !== 'despesa';
+  const mostraDespesas = filtroTipoCat !== 'receita';
+  const nadaEncontrado = (!mostraReceitas || receitasFiltradas.length === 0) && (!mostraDespesas || despesasFiltradas.length === 0);
+
+  function novaCategoria() { setEditing(null); setShowForm(true); }
+
   return (
     <div style={{ paddingTop: 12 }}>
       <CadastrosTabNav subTab={subTab} setSubTab={setSubTab} />
-      <p style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 14, lineHeight: 1.5 }}>
-        Organize suas receitas e despesas em categorias para os gráficos e a previsão ficarem certinhos.
-      </p>
+      <PageToolbar
+        desc="Categorias organizam suas receitas e despesas — é o que alimenta os gráficos, a previsão e o ranking de produtos."
+        actionLabel="Nova categoria"
+        onAction={novaCategoria}
+      />
 
-      <SectionTitle icon={ArrowUpCircle}>Receitas</SectionTitle>
-      <Card style={{ padding: 0 }}>
-        {receitaCats.length === 0 && <div style={{ padding: 16, fontSize: 13, color: 'var(--ink-soft)' }}>Nenhuma categoria de receita.</div>}
-        {receitaCats.map((c, i) => <CategoryRow key={c.id} cat={c} last={i === receitaCats.length - 1} onEdit={() => { setEditing(c); setShowForm(true); }} onDelete={() => remove(c.id)} />)}
-      </Card>
+      <SearchInput value={buscaCat} onChange={setBuscaCat} placeholder="Buscar categoria pelo nome…" />
+      <FilterGroup label="Tipo">
+        <Chip active={filtroTipoCat === 'todas'} onClick={() => setFiltroTipoCat('todas')}>Todas ({receitaCats.length + despesaCats.length})</Chip>
+        <Chip active={filtroTipoCat === 'receita'} onClick={() => setFiltroTipoCat('receita')}>Receitas ({receitaCats.length})</Chip>
+        <Chip active={filtroTipoCat === 'despesa'} onClick={() => setFiltroTipoCat('despesa')}>Despesas ({despesaCats.length})</Chip>
+      </FilterGroup>
 
-      <SectionTitle icon={ArrowDownCircle}>Despesas</SectionTitle>
-      <Card style={{ padding: 0 }}>
-        {despesaCats.length === 0 && <div style={{ padding: 16, fontSize: 13, color: 'var(--ink-soft)' }}>Nenhuma categoria de despesa.</div>}
-        {despesaCats.map((c, i) => <CategoryRow key={c.id} cat={c} last={i === despesaCats.length - 1} onEdit={() => { setEditing(c); setShowForm(true); }} onDelete={() => remove(c.id)} />)}
-      </Card>
+      {nadaEncontrado ? (
+        <EmptyState
+          icon={Tag}
+          title={termo ? 'Nenhuma categoria encontrada' : 'Nenhuma categoria ainda'}
+          desc={termo ? `Nada com "${buscaCat}". Ajuste a busca ou crie uma categoria nova.` : 'Crie a primeira categoria para começar a organizar suas receitas e despesas.'}
+          actionLabel="+ Nova categoria"
+          onAction={novaCategoria}
+        />
+      ) : (
+        <>
+          {mostraReceitas && receitasFiltradas.length > 0 && (
+            <>
+              <SectionTitle icon={ArrowUpCircle}>Receitas · {receitasFiltradas.length}</SectionTitle>
+              <Card style={{ padding: 0 }}>
+                {receitasFiltradas.map((c, i) => <CategoryRow key={c.id} cat={c} last={i === receitasFiltradas.length - 1} onEdit={() => { setEditing(c); setShowForm(true); }} onDelete={() => remove(c.id)} />)}
+              </Card>
+            </>
+          )}
 
-      <Button variant="primary" onClick={() => { setEditing(null); setShowForm(true); }} style={{ width: '100%', marginTop: 16 }}>
-        <Plus size={16} /> Nova categoria
-      </Button>
+          {mostraDespesas && despesasFiltradas.length > 0 && (
+            <>
+              <SectionTitle icon={ArrowDownCircle}>Despesas · {despesasFiltradas.length}</SectionTitle>
+              <Card style={{ padding: 0 }}>
+                {despesasFiltradas.map((c, i) => <CategoryRow key={c.id} cat={c} last={i === despesasFiltradas.length - 1} onEdit={() => { setEditing(c); setShowForm(true); }} onDelete={() => remove(c.id)} />)}
+              </Card>
+            </>
+          )}
+        </>
+      )}
 
       {showForm && (
         <Modal title={editing ? 'Editar categoria' : 'Nova categoria'} onClose={() => { setShowForm(false); setEditing(null); }}>
@@ -3662,7 +3722,7 @@ function ClienteForm({ item, ramosNegocio, indicesReajuste, onSubmit, onCancel, 
         <Toggle checked={ativo} onChange={setAtivo} />
       </div>
 
-      {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginTop: 10, fontWeight: 600 }}>{error}</div>}
+      {error && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', marginTop: 10, fontWeight: 600 }}>{error}</div>}
 
       <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
         {onDelete && (
@@ -3675,6 +3735,121 @@ function ClienteForm({ item, ramosNegocio, indicesReajuste, onSubmit, onCancel, 
   );
 }
 
+function ReajusteForm({ cliente, indicesReajuste, onSubmit, onCancel }) {
+  const [modo, setModo] = useState('indice');
+  const [proximoReajuste, setProximoReajuste] = useState(cliente.proximoReajuste || '');
+  const [indiceReajusteId, setIndiceReajusteId] = useState(cliente.indiceReajusteId || '');
+  const [percentual, setPercentual] = useState(cliente.reajustePercentual != null ? String(cliente.reajustePercentual) : '');
+  const [valor, setValor] = useState(cliente.reajusteValor != null ? String(cliente.reajusteValor) : '');
+  const [suspensoAte, setSuspensoAte] = useState(cliente.reajusteSuspensoAte || '');
+  const [error, setError] = useState('');
+
+  const limiteSuspensao = toISODate(addMonths(new Date(), 12));
+
+  function aplicar(patch) {
+    onSubmit({ ...cliente, ...patch });
+  }
+
+  function confirmarProximoMes() {
+    const base = proximoReajuste ? parseISODate(proximoReajuste) : new Date();
+    aplicar({ proximoReajuste: toISODate(addMonths(base, 1)), reajusteConfirmado: true, reajusteSuspensoAte: null });
+  }
+
+  function salvar() {
+    if (!proximoReajuste) { setError('Informe a data do próximo reajuste.'); return; }
+    if (modo === 'percentual' && (!percentual || Number(percentual) <= 0)) { setError('Informe um percentual válido.'); return; }
+    if (modo === 'valor' && (!valor || Number(valor) <= 0)) { setError('Informe um valor válido.'); return; }
+    if (modo === 'indice' && !indiceReajusteId) { setError('Escolha um índice de reajuste.'); return; }
+    setError('');
+    aplicar({
+      proximoReajuste,
+      indiceReajusteId: modo === 'indice' ? indiceReajusteId : cliente.indiceReajusteId,
+      reajustePercentual: modo === 'percentual' ? Number(percentual) : null,
+      reajusteValor: modo === 'valor' ? Number(valor) : null,
+      reajusteSuspensoAte: null,
+    });
+  }
+
+  function suspender() {
+    if (!suspensoAte) { setError('Informe até quando o reajuste fica suspenso.'); return; }
+    if (suspensoAte > limiteSuspensao) { setError('A suspensão não pode passar de 1 ano.'); return; }
+    if (suspensoAte < toISODate(new Date())) { setError('A data de suspensão precisa ser no futuro.'); return; }
+    setError('');
+    aplicar({ reajusteSuspensoAte: suspensoAte, reajusteConfirmado: false });
+  }
+
+  return (
+    <div>
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{cliente.nomeFantasia}</div>
+        <div style={{ fontSize: 'var(--fs-body)', color: 'var(--ink-soft)', lineHeight: 1.5 }}>
+          Reajuste previsto para {cliente.proximoReajuste ? formatDateBR(cliente.proximoReajuste) : 'data não definida'}
+          {cliente.reajusteConfirmado ? ' · já confirmado por você' : ''}
+          {cliente.reajusteSuspensoAte ? ` · suspenso até ${formatDateBR(cliente.reajusteSuspensoAte)}` : ''}
+        </div>
+      </Card>
+
+      <Field label="Data do reajuste">
+        <input type="date" value={proximoReajuste} onChange={(e) => { setProximoReajuste(e.target.value); setError(''); }} style={inputStyle} />
+      </Field>
+
+      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)', marginBottom: 6 }}>Como calcular</div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+        <Chip active={modo === 'indice'} onClick={() => { setModo('indice'); setError(''); }}>Pelo índice</Chip>
+        <Chip active={modo === 'percentual'} onClick={() => { setModo('percentual'); setError(''); }}>Percentual fixo</Chip>
+        <Chip active={modo === 'valor'} onClick={() => { setModo('valor'); setError(''); }}>Valor em reais</Chip>
+      </div>
+
+      {modo === 'indice' && (
+        <Field label="Índice de reajuste" hint="O percentual acumulado do índice é conferido por você na hora de aplicar.">
+          <select value={indiceReajusteId} onChange={(e) => { setIndiceReajusteId(e.target.value); setError(''); }} style={inputStyle}>
+            <option value="">Escolha um índice</option>
+            {(indicesReajuste || []).map((i) => <option key={i.id} value={i.id}>{i.nome}</option>)}
+          </select>
+        </Field>
+      )}
+      {modo === 'percentual' && (
+        <Field label="Percentual de reajuste (%)" hint="Substitui o índice neste reajuste.">
+          <input type="number" min="0" step="0.01" value={percentual} onChange={(e) => { setPercentual(e.target.value); setError(''); }} style={inputStyle} placeholder="Ex.: 4,5" />
+        </Field>
+      )}
+      {modo === 'valor' && (
+        <Field label="Valor do reajuste" hint="Acréscimo fixo em reais, no lugar do percentual.">
+          <CurrencyInput value={valor} onChange={(v) => { setValor(v); setError(''); }} style={inputStyle} />
+        </Field>
+      )}
+
+      {error && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', marginBottom: 12, fontWeight: 600 }}>{error}</div>}
+
+      <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
+        <Button variant="secondary" onClick={onCancel} style={{ flex: 1 }}>Cancelar</Button>
+        <Button variant="primary" onClick={salvar} style={{ flex: 2 }}>Salvar reajuste</Button>
+      </div>
+      <Button variant="secondary" onClick={confirmarProximoMes} style={{ width: '100%', marginBottom: 16 }}>
+        <Check size={15} /> Confirmar para o próximo mês
+      </Button>
+
+      <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Suspender temporariamente</div>
+        <div style={{ fontSize: 'var(--fs-body)', color: 'var(--ink-soft)', marginBottom: 12, lineHeight: 1.5 }}>
+          O aviso para de aparecer até a data escolhida e volta sozinho depois. No máximo 1 ano, para o reajuste não sair do radar de vez.
+        </div>
+        <Field label="Suspender até">
+          <input
+            type="date"
+            value={suspensoAte}
+            max={limiteSuspensao}
+            min={toISODate(new Date())}
+            onChange={(e) => { setSuspensoAte(e.target.value); setError(''); }}
+            style={inputStyle}
+          />
+        </Field>
+        <Button variant="secondary" onClick={suspender} style={{ width: '100%' }}>Suspender reajuste</Button>
+      </div>
+    </div>
+  );
+}
+
 function ClientesPage({ data, role, persist, askConfirm }) {
   const [busca, setBusca] = useState('');
   const [filterRamo, setFilterRamo] = useState('todos');
@@ -3682,6 +3857,7 @@ function ClientesPage({ data, role, persist, askConfirm }) {
   const [filterAtivo, setFilterAtivo] = useState('ativos');
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [gerenciandoReajuste, setGerenciandoReajuste] = useState(null);
 
   const clientes = data.clientes || [];
   const ramosNegocio = data.ramosNegocio || [];
@@ -3730,9 +3906,17 @@ function ClientesPage({ data, role, persist, askConfirm }) {
       setEditing(null);
     });
   }
+  // Reajuste aplicado: joga a próxima data 12 meses pra frente e limpa os
+  // ajustes daquele ciclo (percentual/valor específico e a confirmação),
+  // porque eles valiam só pro reajuste que acabou de acontecer.
   function marcarReajustado(cliente) {
     const proximo = toISODate(addMonths(parseISODate(cliente.proximoReajuste), 12));
-    persist({ ...data, clientes: clientes.map((c) => (c.id === cliente.id ? { ...c, proximoReajuste: proximo } : c)) });
+    const atualizado = { ...cliente, proximoReajuste: proximo, reajusteConfirmado: false, reajustePercentual: null, reajusteValor: null, reajusteSuspensoAte: null };
+    persist({ ...data, clientes: clientes.map((c) => (c.id === cliente.id ? atualizado : c)) });
+  }
+  function salvarReajuste(cliente) {
+    persist({ ...data, clientes: clientes.map((c) => (c.id === cliente.id ? cliente : c)) });
+    setGerenciandoReajuste(null);
   }
 
   return (
@@ -3746,13 +3930,19 @@ function ClientesPage({ data, role, persist, askConfirm }) {
             {reajustePendente.slice(0, 6).map((c) => {
               const indice = indicesReajuste.find((i) => i.id === c.indiceReajusteId);
               return (
-                <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, color: 'var(--warning-strong)', gap: 8 }}>
+                <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-body)', color: 'var(--warning-strong)', gap: 8 }}>
                   <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {c.nomeFantasia} · {indice?.nome || 'sem índice'} · {c.atrasado ? 'atrasado desde' : 'em'} {formatDateBR(c.proximoReajuste)}
+                    {c.nomeFantasia} · {c.reajustePercentual != null ? `${c.reajustePercentual}%` : c.reajusteValor != null ? formatCurrency(c.reajusteValor) : (indice?.nome || 'sem índice')} · {c.atrasado ? 'atrasado desde' : 'em'} {formatDateBR(c.proximoReajuste)}
+                    {c.reajusteConfirmado ? ' · confirmado' : ''}
                   </span>
-                  <button onClick={() => marcarReajustado(c)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 11.5, cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
-                    Marcar reajustado
-                  </button>
+                  <span style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
+                    <button onClick={() => setGerenciandoReajuste(c)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 'var(--fs-small)', cursor: 'pointer', textDecoration: 'underline' }}>
+                      Gerenciar
+                    </button>
+                    <button onClick={() => marcarReajustado(c)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 'var(--fs-small)', cursor: 'pointer', textDecoration: 'underline' }}>
+                      Já reajustei
+                    </button>
+                  </span>
                 </div>
               );
             })}
@@ -3760,36 +3950,24 @@ function ClientesPage({ data, role, persist, askConfirm }) {
         </Card>
       )}
 
-      <div style={{ position: 'relative', marginBottom: 10 }}>
-        <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--ink-soft)', pointerEvents: 'none' }} />
-        <input
-          type="text"
-          value={busca}
-          onChange={(e) => setBusca(e.target.value)}
-          placeholder="Buscar por nome, razão social ou cidade…"
-          style={{ ...inputStyle, paddingLeft: 34 }}
-        />
-      </div>
+      <SearchInput value={busca} onChange={setBusca} placeholder="Buscar por nome, razão social ou cidade…" />
 
-      <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
-        <div style={{ flex: '1 1 160px' }}>
-          <select value={filterRamo} onChange={(e) => setFilterRamo(e.target.value)} style={inputStyle}>
-            <option value="todos">Todos os ramos</option>
-            {ramosNegocio.map((r) => <option key={r.id} value={r.id}>{r.nome}</option>)}
-          </select>
-        </div>
-        <div style={{ flex: '1 1 160px' }}>
-          <select value={filterProduto} onChange={(e) => setFilterProduto(e.target.value)} style={inputStyle}>
-            <option value="todos">Todos os produtos</option>
-            {categoriasReceita.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
-          </select>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Chip active={filterAtivo === 'ativos'} onClick={() => setFilterAtivo('ativos')}>Ativos</Chip>
-          <Chip active={filterAtivo === 'inativos'} onClick={() => setFilterAtivo('inativos')}>Inativos</Chip>
-          <Chip active={filterAtivo === 'todos'} onClick={() => setFilterAtivo('todos')}>Todos</Chip>
-        </div>
-      </div>
+      <FilterGroup label="Situação">
+        <Chip active={filterAtivo === 'ativos'} onClick={() => setFilterAtivo('ativos')}>Ativos</Chip>
+        <Chip active={filterAtivo === 'inativos'} onClick={() => setFilterAtivo('inativos')}>Inativos</Chip>
+        <Chip active={filterAtivo === 'todos'} onClick={() => setFilterAtivo('todos')}>Todos</Chip>
+      </FilterGroup>
+
+      <FilterGroup label="Ramo e produto">
+        <select value={filterRamo} onChange={(e) => setFilterRamo(e.target.value)} style={{ ...inputStyle, flex: '1 1 160px', width: 'auto' }}>
+          <option value="todos">Todos os ramos</option>
+          {ramosNegocio.map((r) => <option key={r.id} value={r.id}>{r.nome}</option>)}
+        </select>
+        <select value={filterProduto} onChange={(e) => setFilterProduto(e.target.value)} style={{ ...inputStyle, flex: '1 1 160px', width: 'auto' }}>
+          <option value="todos">Todos os produtos</option>
+          {categoriasReceita.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+        </select>
+      </FilterGroup>
 
       {list.length === 0 ? (
         <EmptyState icon={Users} title="Nenhum cliente encontrado" desc="Ajuste os filtros ou cadastre um novo cliente." actionLabel={role === 'admin' ? '+ Novo cliente' : undefined} onAction={role === 'admin' ? () => { setEditing(null); setShowForm(true); } : undefined} />
@@ -3807,11 +3985,11 @@ function ClientesPage({ data, role, persist, askConfirm }) {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.nomeFantasia}</span>
-                    {c.ativo === false && <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ink-soft)', background: 'var(--surface-2)', borderRadius: 999, padding: '2px 8px', flexShrink: 0 }}>Inativo</span>}
+                    {c.ativo === false && <span style={{ fontSize: 'var(--fs-micro)', fontWeight: 700, color: 'var(--ink-soft)', background: 'var(--surface-2)', borderRadius: 999, padding: '2px 8px', flexShrink: 0 }}>Inativo</span>}
                   </div>
                   {linha2 && <div style={{ fontSize: 12, color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{linha2}</div>}
                   {(c.contatoTelefone || c.contatoEmail) && (
-                    <div style={{ fontSize: 11.5, color: 'var(--ink-soft)', marginTop: 2 }}>{[c.contatoTelefone, c.contatoEmail].filter(Boolean).join(' · ')}</div>
+                    <div style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', marginTop: 2 }}>{[c.contatoTelefone, c.contatoEmail].filter(Boolean).join(' · ')}</div>
                   )}
                 </div>
               </div>
@@ -3835,6 +4013,17 @@ function ClientesPage({ data, role, persist, askConfirm }) {
             onSubmit={save}
             onCancel={() => { setShowForm(false); setEditing(null); }}
             onDelete={editing ? () => remove(editing.id) : null}
+          />
+        </Modal>
+      )}
+
+      {gerenciandoReajuste && (
+        <Modal title="Gerenciar reajuste" onClose={() => setGerenciandoReajuste(null)}>
+          <ReajusteForm
+            cliente={gerenciandoReajuste}
+            indicesReajuste={indicesReajuste}
+            onSubmit={salvarReajuste}
+            onCancel={() => setGerenciandoReajuste(null)}
           />
         </Modal>
       )}
@@ -3877,21 +4066,13 @@ function VencimentosPage({ data, onConfirmarRecebimento, onEditTransaction }) {
         <StatCard title="Em dia" value={String(qtdEmDia)} icon={Check} tone="success" footer="vencimento confirmado ou ainda não chegou" />
       </div>
 
-      <div style={{ position: 'relative', marginBottom: 10 }}>
-        <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--ink-soft)', pointerEvents: 'none' }} />
-        <input
-          type="text"
-          value={busca}
-          onChange={(e) => setBusca(e.target.value)}
-          placeholder="Buscar por cliente…"
-          style={{ ...inputStyle, paddingLeft: 34 }}
-        />
-      </div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+      <SearchInput value={busca} onChange={setBusca} placeholder="Buscar por cliente…" />
+
+      <FilterGroup label="Urgência">
         <Chip active={filterUrgencia === 'todos'} onClick={() => setFilterUrgencia('todos')}>Todos</Chip>
         <Chip active={filterUrgencia === 'criticos'} onClick={() => setFilterUrgencia('criticos')}>Críticos</Chip>
         <Chip active={filterUrgencia === 'atencao'} onClick={() => setFilterUrgencia('atencao')}>Atenção</Chip>
-      </div>
+      </FilterGroup>
 
       {linhas.length === 0 ? (
         <EmptyState icon={Clock} title="Nada por aqui" desc="Nenhum vencimento encontrado com esse filtro." />
@@ -3939,6 +4120,146 @@ function VencimentosPage({ data, onConfirmarRecebimento, onEditTransaction }) {
           })}
         </Card>
       )}
+    </div>
+  );
+}
+
+/* =========================================================================
+   PÁGINA: AJUDA
+   ========================================================================= */
+
+// Conteúdo da ajuda: texto fixo, por seção, filtrado por papel — mesma
+// estrutura de `todos: false` usada na página de Configurações.
+const AJUDA_SECOES = [
+  {
+    key: 'inicio',
+    icon: Home,
+    titulo: 'Visão geral',
+    todos: true,
+    itens: [
+      ['O que são os cartões do topo', 'Saldo acumulado é tudo que entrou menos tudo que saiu, desde sempre até hoje — não é saldo de banco. Receitas, Despesas e Resultado se referem só ao período escolhido logo acima deles.'],
+      ['Trocar o período', 'Os botões "Este mês", "Últimos 3 meses", "Próx. 3 meses" e afins mudam todos os números e gráficos da tela de uma vez. Ao entrar, o sistema já mostra o mês atual.'],
+      ['Cartões coloridos de aviso', 'Amarelo é atenção, vermelho é urgente. Eles só aparecem quando existe algo de fato precisando de você — se não aparecerem, não há pendência.'],
+      ['Produto mais vendido', 'Mostra qual serviço rendeu mais no período. O ranking completo fica logo abaixo do gráfico de fluxo de caixa.'],
+    ],
+  },
+  {
+    key: 'lancamentos',
+    icon: Receipt,
+    titulo: 'Lançamentos e vendas',
+    todos: true,
+    itens: [
+      ['Receita e despesa', 'Receita é dinheiro que entra, despesa é dinheiro que sai. O botão + no meio da barra de baixo abre o menu para lançar cliente, venda, receita ou despesa.'],
+      ['Lançamento recorrente', 'Marque "Recorrente" quando a cobrança se repete todo mês (contrato de rádio, aluguel, assinatura). O sistema projeta os meses seguintes sozinho — não precisa lançar de novo a cada mês.'],
+      ['Conta em aberto', 'Desligue "Já foi pago/recebido" e informe o vencimento quando a conta ainda não foi quitada. Ela passa a aparecer nos cartões de vencimento e atraso.'],
+      ['Venda aguardando aprovação', 'Toda venda lançada por um vendedor entra como pendente e não conta em saldo, meta nem comissão até o administrador revisar e aprovar.'],
+      ['Filtros', 'Use os filtros de Tipo, Período, Recorrência e Categoria para achar um lançamento específico. A busca por texto procura por cliente, descrição ou categoria.'],
+    ],
+  },
+  {
+    key: 'previsao',
+    icon: TrendingUp,
+    titulo: 'Previsão',
+    todos: true,
+    itens: [
+      ['Para que serve', 'Projeta quanto deve entrar nos próximos meses, somando os contratos recorrentes ativos com as vendas já lançadas para frente.'],
+      ['Metas', 'A meta pode ser de cada vendedor ou da empresa inteira. Verde significa que bateu a meta, dourado que está perto, vinho que está longe.'],
+    ],
+  },
+  {
+    key: 'clientes',
+    icon: Users,
+    titulo: 'Clientes',
+    todos: true,
+    itens: [
+      ['Buscar e filtrar', 'Você pode buscar por nome, razão social ou cidade, e filtrar por ramo de negócio, produto contratado e clientes ativos ou inativos.'],
+      ['Cliente inativo', 'Desligar "Cliente ativo" tira o cliente das listas do dia a dia, mas o histórico de vendas dele continua guardado.'],
+      ['Aviso de reajuste', 'O sistema avisa 30 dias antes da data de reajuste do contrato. No aviso você pode clicar em "Gerenciar" para mudar a data, trocar o índice, colocar um percentual ou valor fixo, ou suspender o reajuste temporariamente.'],
+      ['Já reajustei', 'Depois de aplicar o reajuste com o cliente, clique em "Já reajustei" — o sistema joga a próxima data para 12 meses à frente automaticamente.'],
+    ],
+  },
+  {
+    key: 'vencimentos',
+    icon: Clock,
+    titulo: 'Vencimentos',
+    todos: false,
+    itens: [
+      ['Como o atraso é contado', 'Cada contrato recorrente vence todo mês no mesmo dia da data original dele. Se você não confirmar o recebimento depois desse dia, o sistema começa a contar os dias de atraso.'],
+      ['Atenção e Crítico', 'Até 10 dias de atraso o cliente aparece como Atenção (amarelo). Passando disso vira Crítico (vermelho), que é quando vale cobrar de verdade.'],
+      ['Confirmar recebimento', 'O botão de check ao lado de cada linha marca que aquele mês foi recebido. O sistema não conversa com o banco — essa confirmação é sua.'],
+    ],
+  },
+  {
+    key: 'cadastros',
+    icon: Tag,
+    titulo: 'Cadastros',
+    todos: false,
+    itens: [
+      ['Categorias', 'Os grupos que organizam receitas e despesas nos relatórios (ex.: Rádio do Cliente, Aluguel, Folha de pagamento).'],
+      ['Planos negociados', 'Combinações prontas de preço e comissão. Quando o vendedor escolhe um plano na venda, o valor e a comissão vêm preenchidos.'],
+      ['Serviços', 'O que a empresa vende de fato. Todo plano aponta para um serviço.'],
+      ['Ramos de negócio', 'Classificação do cliente (supermercado, farmácia, construção...), usada nos filtros de Clientes.'],
+      ['Índices de reajuste', 'IPCA, IGP-M e afins, usados no aviso anual de reajuste de contrato. O padrão do sistema é o IPCA.'],
+    ],
+  },
+  {
+    key: 'config',
+    icon: Settings,
+    titulo: 'Configurações',
+    todos: true,
+    itens: [
+      ['Aparência', 'Tema claro, escuro ou automático (acompanha o ajuste do seu celular ou computador).'],
+      ['Usuários', 'Somente administrador. Define quem é administrador e quem é vendedor.'],
+      ['Mural de orientação', 'Somente administrador. Recados e materiais em PDF que aparecem na tela inicial de toda a equipe.'],
+    ],
+  },
+];
+
+function AjudaSecao({ secao, aberta, onToggle }) {
+  const Icon = secao.icon;
+  return (
+    <Card style={{ padding: 0, marginBottom: 10, overflow: 'hidden' }}>
+      <button
+        onClick={onToggle}
+        aria-expanded={aberta}
+        style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', padding: 16, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink)' }}
+      >
+        <span aria-hidden="true" style={{ width: 38, height: 38, borderRadius: 'var(--radius)', background: 'var(--brand-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <Icon size={19} color="var(--primary-text)" />
+        </span>
+        <span style={{ flex: 1, fontWeight: 700, fontSize: 'var(--fs-title)' }}>{secao.titulo}</span>
+        <ChevronRight size={17} style={{ color: 'var(--ink-soft)', flexShrink: 0, transform: aberta ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
+      </button>
+      {aberta && (
+        <div style={{ padding: '0 16px 16px' }}>
+          {secao.itens.map(([titulo, texto]) => (
+            <div key={titulo} style={{ paddingTop: 12, borderTop: '1px solid var(--border)', marginTop: 12 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>{titulo}</div>
+              <div style={{ fontSize: 13, color: 'var(--ink-soft)', lineHeight: 1.6 }}>{texto}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function AjudaPage({ role }) {
+  const [abertas, setAbertas] = useState({ inicio: true });
+  const secoes = AJUDA_SECOES.filter((s) => s.todos || role === 'admin');
+
+  function toggle(key) {
+    setAbertas((cur) => ({ ...cur, [key]: !cur[key] }));
+  }
+
+  return (
+    <div style={{ paddingTop: 12 }}>
+      <p style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 16, lineHeight: 1.6 }}>
+        Toque em cada tema para abrir as explicações. Se ficar alguma dúvida que não está aqui, fale com o administrador do sistema.
+      </p>
+      {secoes.map((s) => (
+        <AjudaSecao key={s.key} secao={s} aberta={!!abertas[s.key]} onToggle={() => toggle(s.key)} />
+      ))}
     </div>
   );
 }
@@ -4002,7 +4323,7 @@ function ConfiguracoesPage({ role, themePref, onTheme, onUsers, onMural }) {
               <Icon size={19} style={{ color: 'var(--primary)' }} />
             </span>
             <span style={{ minWidth: 0 }}>
-              <span style={{ display: 'block', fontWeight: 700, fontSize: 14.5, marginBottom: 3 }}>{i.titulo}</span>
+              <span style={{ display: 'block', fontWeight: 700, fontSize: 'var(--fs-title)', marginBottom: 3 }}>{i.titulo}</span>
               <span style={{ display: 'block', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{i.desc}</span>
             </span>
           </button>
@@ -4095,7 +4416,7 @@ function BottomNav({ page, setPage, onAdd, role }) {
     return (
       <button key={it.key} onClick={() => setPage(it.key)} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, color: active ? 'var(--primary-text)' : 'var(--ink-soft)', padding: '4px 8px', flex: 1 }}>
         <Icon size={20} strokeWidth={active ? 2.4 : 2} />
-        <span style={{ fontSize: 10.5, fontWeight: active ? 700 : 500 }}>{it.label}</span>
+        <span style={{ fontSize: 'var(--fs-micro)', fontWeight: active ? 700 : 500 }}>{it.label}</span>
       </button>
     );
   }
@@ -4202,8 +4523,8 @@ function LoginScreen() {
               <span style={{ fontSize: 13, color: 'var(--ink-soft)' }}>Lembrar de mim neste dispositivo</span>
             </label>
           )}
-          {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{error}</div>}
-          {info && <div style={{ color: 'var(--positive)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{info}</div>}
+          {error && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', marginBottom: 10, fontWeight: 600 }}>{error}</div>}
+          {info && <div style={{ color: 'var(--positive)', fontSize: 'var(--fs-body)', marginBottom: 10, fontWeight: 600 }}>{info}</div>}
           <Button variant="primary" onClick={submit} style={{ width: '100%' }} disabled={loading}>
             {loading ? 'Aguarde…' : mode === 'login' ? 'Entrar' : mode === 'signup' ? 'Criar conta' : 'Enviar link de redefinição'}
           </Button>
@@ -4212,7 +4533,7 @@ function LoginScreen() {
         {mode === 'login' && (
           <button
             onClick={() => trocarModo('reset')}
-            style={{ display: 'block', margin: '14px auto 0', background: 'none', border: 'none', color: 'var(--ink-soft)', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }}
+            style={{ display: 'block', margin: '14px auto 0', background: 'none', border: 'none', color: 'var(--ink-soft)', fontWeight: 600, fontSize: 'var(--fs-body)', cursor: 'pointer' }}
           >
             Esqueci minha senha
           </button>
@@ -4261,7 +4582,7 @@ function ResetPasswordScreen({ onDone }) {
           <Field label="Confirmar nova senha">
             <input type="password" style={inputStyle} value={confirmar} onChange={(e) => setConfirmar(e.target.value)} placeholder="••••••••" />
           </Field>
-          {error && <div style={{ color: 'var(--negative)', fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{error}</div>}
+          {error && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', marginBottom: 10, fontWeight: 600 }}>{error}</div>}
           <Button variant="primary" onClick={submit} style={{ width: '100%' }} disabled={loading}>
             {loading ? 'Salvando…' : 'Salvar nova senha'}
           </Button>
@@ -4757,8 +5078,9 @@ export default function App() {
     previsao: role === 'vendedor' ? 'Sua previsão' : 'Previsão',
     clientes: 'Clientes',
     vencimentos: 'Vencimentos',
-    categorias: 'Categorias',
+    categorias: 'Cadastros',
     config: 'Configurações',
+    ajuda: 'Ajuda',
   };
   const pageSubtitles = {
     inicio: primeiroNome
@@ -4772,8 +5094,9 @@ export default function App() {
       : 'Projeção financeira e panorama da equipe de vendas.',
     clientes: 'Cadastro de clientes, com busca, filtros e aviso de reajuste de contrato.',
     vencimentos: 'Relatório de vencimentos por cliente, com urgência por atraso.',
-    categorias: 'Categorias de receita e despesa, e os planos negociados.',
+    categorias: 'Categorias, planos, serviços, ramos de negócio e índices de reajuste.',
     config: 'Aparência, usuários e mural de orientação.',
+    ajuda: 'Como usar cada parte do sistema, explicado passo a passo.',
   };
 
   // Avisos reais do sistema — nada decorativo no sino.
@@ -4829,6 +5152,9 @@ export default function App() {
         )}
         {page === 'vencimentos' && role !== 'vendedor' && (
           <VencimentosPage data={data} onConfirmarRecebimento={confirmarRecebimento} onEditTransaction={openEditTransaction} />
+        )}
+        {page === 'ajuda' && (
+          <AjudaPage role={role} />
         )}
         {page === 'categorias' && role !== 'vendedor' && (
           <CategoriasPage data={data} persist={persist} askConfirm={askConfirm} />

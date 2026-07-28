@@ -34,18 +34,27 @@ export const GLOBAL_CSS = `
   --text-secondary:#667085;
   --text-on-dark:#FFFFFF;
   --text-on-dark-soft:#A7A3B5;
-  --border:#E4E7EC;
+  --border:#EAECF0;
+  --border-strong:#DDE1E7;
   --success:#15803D; --success-light:#DCFCE7;
   --warning:#D97706; --warning-light:#FEF3C7; --warning-strong:#92400E;
   --danger:#DC2626;  --danger-light:#FEE2E2;
   --info:#2563EB;    --info-light:#DBEAFE;
+  --on-primary:#FFFFFF;
+  --category-fallback:#7A6A58;
+  --overlay-scrim:rgba(23,21,31,0.38);
 
   /* --- medidas --- */
-  --radius-sm:10px; --radius:12px; --radius-lg:14px; --radius-pill:999px;
-  --shadow-sm:0 1px 2px rgba(23,21,31,0.04);
-  --shadow:0 1px 3px rgba(23,21,31,0.06), 0 1px 2px rgba(23,21,31,0.04);
-  --shadow-lg:0 8px 24px -8px rgba(23,21,31,0.12);
+  --radius-sm:10px; --radius:12px; --radius-lg:16px; --radius-pill:999px;
+  --shadow-sm:0 1px 2px rgba(23,21,31,0.03);
+  --shadow:0 1px 2px rgba(23,21,31,0.04);
+  --shadow-lg:0 12px 32px -12px rgba(23,21,31,0.10);
   --gradient-brand:linear-gradient(135deg, #8B5CF6 0%, #6D28D9 50%, #4338CA 100%);
+
+  /* --- escala de texto: uma família de tamanhos, em vez de meio-passos
+     espalhados (11,5 / 12,5 / 13,5...) que vinham de ajustes pontuais --- */
+  --fs-micro:11px; --fs-small:12px; --fs-body:13px;
+  --fs-base:14px; --fs-title:15px; --fs-lg:17px;
 
   /* --- apelidos usados pelo código existente --- */
   --bg:var(--background);
@@ -81,14 +90,16 @@ export const GLOBAL_CSS = `
   --surface-2:#292435;
   --text-primary:#F2F0F7;
   --text-secondary:#A7A3B5;
-  --border:#332C45;
+  --border:#2E2840;
+  --border-strong:#3A3350;
   --success:#4ADE80; --success-light:#14321F;
   --warning:#FBBF24; --warning-light:#3A2C0C; --warning-strong:#FBBF24;
   --danger:#F87171;  --danger-light:#3B1D1D;
   --info:#60A5FA;    --info-light:#152744;
-  --shadow-sm:0 1px 2px rgba(0,0,0,0.3);
-  --shadow:0 1px 3px rgba(0,0,0,0.35);
-  --shadow-lg:0 8px 24px -8px rgba(0,0,0,0.5);
+  --overlay-scrim:rgba(0,0,0,0.55);
+  --shadow-sm:0 1px 2px rgba(0,0,0,0.22);
+  --shadow:0 1px 2px rgba(0,0,0,0.26);
+  --shadow-lg:0 12px 32px -12px rgba(0,0,0,0.45);
 }
 
 /* Números grandes: Inter apertada e alinhada em colunas, em vez de serifada

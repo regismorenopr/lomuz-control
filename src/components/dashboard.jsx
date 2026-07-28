@@ -112,7 +112,7 @@ export function EmptyBlock({ icon: Icon = Inbox, title, desc, action }) {
       >
         <Icon size={20} style={{ color: 'var(--text-secondary)' }} />
       </span>
-      <div style={{ fontWeight: 700, fontSize: 14.5, marginBottom: 5 }}>{title}</div>
+      <div style={{ fontWeight: 700, fontSize: 'var(--fs-title)', marginBottom: 5 }}>{title}</div>
       {desc && <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, maxWidth: 340, margin: '0 auto' }}>{desc}</div>}
       {action}
     </div>
@@ -131,7 +131,7 @@ export function ErrorBlock({ title = 'Não foi possível carregar', desc, onRetr
       >
         <AlertCircle size={20} style={{ color: 'var(--danger)' }} />
       </span>
-      <div style={{ fontWeight: 700, fontSize: 14.5, marginBottom: 5 }}>{title}</div>
+      <div style={{ fontWeight: 700, fontSize: 'var(--fs-title)', marginBottom: 5 }}>{title}</div>
       {desc && <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, maxWidth: 340, margin: '0 auto' }}>{desc}</div>}
       {onRetry && (
         <button
@@ -157,7 +157,7 @@ export function NotAvailableBlock({ title, desc }) {
   return (
     <div style={{ padding: '26px 20px', textAlign: 'center' }}>
       <StatusBadge tone="info" icon={Info}>Ainda não disponível</StatusBadge>
-      <div style={{ fontWeight: 700, fontSize: 14.5, margin: '12px 0 5px' }}>{title}</div>
+      <div style={{ fontWeight: 700, fontSize: 'var(--fs-title)', margin: '12px 0 5px' }}>{title}</div>
       <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.55, maxWidth: 380, margin: '0 auto' }}>{desc}</div>
     </div>
   );
@@ -206,7 +206,7 @@ export function StatCard({
               <Icon size={19} style={{ color: t.fg }} />
             </span>
           )}
-          <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <span style={{ fontSize: 'var(--fs-body)', fontWeight: 600, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {title}
           </span>
         </div>
@@ -290,7 +290,7 @@ export function CashFlowChart({ rows, loading, periodSelector, title = 'Fluxo de
       aria-labelledby="titulo-fluxo-caixa"
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-        <h2 id="titulo-fluxo-caixa" style={{ margin: 0, fontSize: 15.5, fontWeight: 700 }}>{title}</h2>
+        <h2 id="titulo-fluxo-caixa" style={{ margin: 0, fontSize: 'var(--fs-title)', fontWeight: 700 }}>{title}</h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
           {single ? (
             <LegendDot color="var(--primary)">{singleLabel}</LegendDot>
@@ -376,7 +376,7 @@ export function Panel({ title, action, children, style }) {
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '16px 18px', borderBottom: '1px solid var(--border)' }}>
-        <h2 style={{ margin: 0, fontSize: 15.5, fontWeight: 700 }}>{title}</h2>
+        <h2 style={{ margin: 0, fontSize: 'var(--fs-title)', fontWeight: 700 }}>{title}</h2>
         {action}
       </div>
       {children}

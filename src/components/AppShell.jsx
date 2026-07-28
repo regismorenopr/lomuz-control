@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Home, Receipt, TrendingUp, Tag, Settings, Bell, LogOut, ChevronDown, Users, Clock } from 'lucide-react';
+import { Home, Receipt, TrendingUp, Tag, Settings, Bell, LogOut, ChevronDown, Users, Clock, HelpCircle } from 'lucide-react';
 import { LogoHorizontal } from '../brand/Logo.jsx';
 
 /* =========================================================================
@@ -24,7 +24,10 @@ export function navItemsFor(role) {
   ];
   if (role !== 'vendedor') {
     base.push({ key: 'vencimentos', label: 'Vencimentos', icon: Clock });
-    base.push({ key: 'categorias', label: 'Categorias', icon: Tag });
+    // "Cadastros" e não "Categorias": a página abriga 5 cadastros diferentes
+    // (categorias, planos, serviços, ramos, índices), e o nome antigo
+    // descrevia só o primeiro deles.
+    base.push({ key: 'categorias', label: 'Cadastros', icon: Tag });
   }
   base.push({ key: 'config', label: 'Configurações', icon: Settings });
   return base;
@@ -231,6 +234,23 @@ export function AppShell({
           </nav>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 'auto', flexShrink: 0 }}>
+            {/* Fica no cabeçalho, não no menu: a barra de navegação some no
+                celular, e a ajuda precisa estar sempre a um toque. */}
+            <button
+              onClick={() => setPage('ajuda')}
+              aria-label="Ajuda"
+              aria-current={page === 'ajuda' ? 'page' : undefined}
+              title="Ajuda"
+              style={{
+                background: page === 'ajuda' ? 'var(--primary)' : 'transparent',
+                border: page === 'ajuda' ? '1px solid var(--primary)' : '1px solid var(--border)',
+                borderRadius: 'var(--radius-sm)', width: 38, height: 38, cursor: 'pointer',
+                color: page === 'ajuda' ? '#fff' : 'var(--text-secondary)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}
+            >
+              <HelpCircle size={18} />
+            </button>
             <AlertsBell alerts={alerts} onAlertClick={onAlertClick} />
             <UserMenu nome={nome} role={role} onLogout={onLogout} />
           </div>
