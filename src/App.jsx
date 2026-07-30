@@ -3839,11 +3839,22 @@ function ReajusteForm({ cliente, indicesReajuste, onSubmit, onCancel }) {
   );
 }
 
+// Quantos clientes a lista mostra antes de pedir "mostrar mais". A base tem
+// centenas de cadastros; jogar todos na tela de uma vez trava a rolagem no
+// celular e não ajuda ninguém — quem procura alguém específico usa a busca.
+const CLIENTES_POR_PAGINA = 60;
+
+// Só os dígitos: deixa procurar CNPJ do jeito que a pessoa tem em mãos,
+// com ou sem ponto e barra.
+function soDigitos(v) { return (v || '').replace(/\D/g, ''); }
+
 function ClientesPage({ data, role, persist, askConfirm }) {
   const [busca, setBusca] = useState('');
   const [filterRamo, setFilterRamo] = useState('todos');
   const [filterProduto, setFilterProduto] = useState('todos');
   const [filterAtivo, setFilterAtivo] = useState('ativos');
+  const [filterEstado, setFilterEstado] = useState('todos');
+  const [limite, setLimite] = useState(CLIENTES_POR_PAGINA);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [gerenciandoReajuste, setGerenciandoReajuste] = useState(null);
@@ -3863,24 +3874,39 @@ function ClientesPage({ data, role, persist, askConfirm }) {
     if (t.categoriaId) produtosPorCliente.get(chave).add(t.categoriaId);
   });
 
+  // Estados presentes na base, pra oferecer só UF que existe de verdade.
+  const estados = [...new Set(clientes.map((c) => c.estado).filter(Boolean))].sort();
+
   const termo = busca.trim().toLowerCase();
+  const termoDigitos = soDigitos(busca);
   let list = clientes.filter((c) => {
     if (filterAtivo === 'ativos' && c.ativo === false) return false;
     if (filterAtivo === 'inativos' && c.ativo !== false) return false;
     if (filterRamo !== 'todos' && c.ramoNegocioId !== filterRamo) return false;
+    if (filterEstado !== 'todos' && c.estado !== filterEstado) return false;
     if (filterProduto !== 'todos') {
       const produtos = produtosPorCliente.get((c.nomeFantasia || '').trim().toLowerCase());
       if (!produtos || !produtos.has(filterProduto)) return false;
     }
     if (termo) {
+      // Se o que foi digitado tem 3+ dígitos, também vale como busca de
+      // CNPJ/CPF — senão "10" acharia todo cliente com 10 no endereço.
+      const porDocumento = termoDigitos.length >= 3 && soDigitos(c.documento).includes(termoDigitos);
       const alvo = `${c.nomeFantasia} ${c.razaoSocial} ${c.organizacaoRede} ${c.cidade}`.toLowerCase();
-      if (!alvo.includes(termo)) return false;
+      if (!alvo.includes(termo) && !porDocumento) return false;
     }
     return true;
   });
   list = [...list].sort((a, b) => (a.nomeFantasia || '').localeCompare(b.nomeFantasia || ''));
+  const visiveis = list.slice(0, limite);
+  const totalConsiderado = clientes.filter((c) => (filterAtivo === 'ativos' ? c.ativo !== false : filterAtivo === 'inativos' ? c.ativo === false : true)).length;
+  const filtrando = list.length !== totalConsiderado;
 
   const reajustePendente = role === 'admin' ? clientesComReajustePendente(clientes) : [];
+
+  // Mexeu na busca ou num filtro, a lista volta pro começo — senão a pessoa
+  // filtra e continua vendo "mostrar mais" de um resultado que já cabe todo.
+  useEffect(() => { setLimite(CLIENTES_POR_PAGINA); }, [busca, filterRamo, filterProduto, filterAtivo, filterEstado]);
 
   function save(cliente) {
     const list2 = editing ? clientes.map((c) => (c.id === cliente.id ? cliente : c)) : [...clientes, cliente];
@@ -3939,7 +3965,7 @@ function ClientesPage({ data, role, persist, askConfirm }) {
         </Card>
       )}
 
-      <SearchInput value={busca} onChange={setBusca} placeholder="Buscar por nome, razão social ou cidade…" />
+      <SearchInput value={busca} onChange={setBusca} placeholder="Buscar por nome, razão social, cidade ou CNPJ…" />
 
       <FilterGroup label="Situação">
         <Chip active={filterAtivo === 'ativos'} onClick={() => setFilterAtivo('ativos')}>Ativos</Chip>
@@ -3947,29 +3973,49 @@ function ClientesPage({ data, role, persist, askConfirm }) {
         <Chip active={filterAtivo === 'todos'} onClick={() => setFilterAtivo('todos')}>Todos</Chip>
       </FilterGroup>
 
-      <FilterGroup label="Ramo e produto">
-        <select value={filterRamo} onChange={(e) => setFilterRamo(e.target.value)} style={{ ...inputStyle, flex: '1 1 160px', width: 'auto' }}>
-          <option value="todos">Todos os ramos</option>
-          {ramosNegocio.map((r) => <option key={r.id} value={r.id}>{r.nome}</option>)}
-        </select>
+      <FilterGroup label={ramosNegocio.length > 0 ? 'Ramo, produto e estado' : 'Produto e estado'}>
+        {/* O seletor de ramo só aparece quando existe ramo cadastrado. Sem
+            isso ele fica na tela como um filtro que nunca filtra nada. */}
+        {ramosNegocio.length > 0 && (
+          <select value={filterRamo} onChange={(e) => setFilterRamo(e.target.value)} style={{ ...inputStyle, flex: '1 1 160px', width: 'auto' }}>
+            <option value="todos">Todos os ramos</option>
+            {ramosNegocio.map((r) => <option key={r.id} value={r.id}>{r.nome}</option>)}
+          </select>
+        )}
         <select value={filterProduto} onChange={(e) => setFilterProduto(e.target.value)} style={{ ...inputStyle, flex: '1 1 160px', width: 'auto' }}>
           <option value="todos">Todos os produtos</option>
           {categoriasReceita.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
         </select>
+        {estados.length > 1 && (
+          <select value={filterEstado} onChange={(e) => setFilterEstado(e.target.value)} style={{ ...inputStyle, flex: '0 1 120px', width: 'auto' }}>
+            <option value="todos">Todos os estados</option>
+            {estados.map((uf) => <option key={uf} value={uf}>{uf}</option>)}
+          </select>
+        )}
       </FilterGroup>
+
+      <div style={{ margin: '4px 2px 10px', fontSize: 'var(--fs-small)', color: 'var(--ink-soft)' }}>
+        {filtrando
+          ? `${list.length} de ${totalConsiderado} cliente(s)`
+          : `${list.length} cliente(s)`}
+        {list.length > visiveis.length ? ` · mostrando os ${visiveis.length} primeiros` : ''}
+      </div>
 
       {list.length === 0 ? (
         <EmptyState icon={Users} title="Nenhum cliente encontrado" desc="Ajuste os filtros ou cadastre um novo cliente." actionLabel={role === 'admin' ? '+ Novo cliente' : undefined} onAction={role === 'admin' ? () => { setEditing(null); setShowForm(true); } : undefined} />
       ) : (
         <Card style={{ padding: 0 }}>
-          {list.map((c, i) => {
+          {visiveis.map((c, i) => {
             const ramo = ramosNegocio.find((r) => r.id === c.ramoNegocioId);
-            const linha2 = [c.organizacaoRede || c.razaoSocial, [c.cidade, c.estado].filter(Boolean).join('/'), ramo?.nome].filter(Boolean).join(' · ');
+            // O documento entra na linha de apoio porque a base tem redes com
+            // várias lojas de mesmo nome fantasia (Lojas Junitex, Brasil
+            // Supermercados...) — sem o CNPJ as linhas ficam idênticas.
+            const linha2 = [c.organizacaoRede || c.razaoSocial, [c.cidade, c.estado].filter(Boolean).join('/'), ramo?.nome, c.documento].filter(Boolean).join(' · ');
             return (
               <div
                 key={c.id}
                 onClick={role === 'admin' ? () => { setEditing(c); setShowForm(true); } : undefined}
-                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', borderBottom: i === list.length - 1 ? 'none' : '1px solid var(--border)', cursor: role === 'admin' ? 'pointer' : 'default' }}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', borderBottom: i === visiveis.length - 1 ? 'none' : '1px solid var(--border)', cursor: role === 'admin' ? 'pointer' : 'default' }}
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -3985,6 +4031,12 @@ function ClientesPage({ data, role, persist, askConfirm }) {
             );
           })}
         </Card>
+      )}
+
+      {list.length > visiveis.length && (
+        <Button variant="secondary" onClick={() => setLimite((n) => n + CLIENTES_POR_PAGINA)} style={{ width: '100%', marginTop: 12 }}>
+          Mostrar mais {Math.min(CLIENTES_POR_PAGINA, list.length - visiveis.length)} de {list.length - visiveis.length} restantes
+        </Button>
       )}
 
       {role === 'admin' && list.length > 0 && (
@@ -4162,7 +4214,9 @@ const AJUDA_SECOES = [
     titulo: 'Clientes',
     todos: true,
     itens: [
-      ['Buscar e filtrar', 'Você pode buscar por nome, razão social ou cidade, e filtrar por ramo de negócio, produto contratado e clientes ativos ou inativos.'],
+      ['Buscar e filtrar', 'A busca procura por nome, razão social, cidade e também por CNPJ ou CPF — pode digitar com ou sem ponto e barra. Os filtros são por produto contratado, estado e clientes ativos ou inativos. O filtro de ramo de negócio só aparece depois que houver ramo cadastrado.'],
+      ['Lista grande', 'A lista mostra 60 clientes por vez, com o total logo acima dela. Use "Mostrar mais" para carregar o próximo bloco, ou a busca para achar direto quem você procura.'],
+      ['Clientes com o mesmo nome', 'Redes com várias lojas costumam repetir o nome fantasia. Por isso o CNPJ aparece na linha de baixo de cada cliente, para você saber qual é qual.'],
       ['Cliente inativo', 'Desligar "Cliente ativo" tira o cliente das listas do dia a dia, mas o histórico de vendas dele continua guardado.'],
       ['Aviso de reajuste', 'O sistema avisa 30 dias antes da data de reajuste do contrato. No aviso você pode clicar em "Gerenciar" para mudar a data, trocar o índice, colocar um percentual ou valor fixo, ou suspender o reajuste temporariamente.'],
       ['Já reajustei', 'Depois de aplicar o reajuste com o cliente, clique em "Já reajustei" — o sistema joga a próxima data para 12 meses à frente automaticamente.'],
