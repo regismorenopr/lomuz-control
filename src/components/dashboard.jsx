@@ -273,7 +273,7 @@ function LegendDot({ color, children }) {
  */
 export function CashFlowChart({ rows, loading, periodSelector, title = 'Fluxo de caixa', mode = 'fluxo', emphasize }) {
   const single = mode !== 'fluxo';
-  const singleLabel = mode === 'saldo' ? 'Saldo acumulado' : 'Resultado mensal';
+  const singleLabel = 'Resultado mensal';
   const temDado = single
     ? rows?.some((r) => r.saldo !== 0)
     : rows?.some((r) => r.entradas > 0 || r.saidas > 0);

@@ -7,7 +7,7 @@ import {
   Home, Receipt, TrendingUp, Tag, Plus, X, Calendar, ChevronRight, Repeat, Check,
   ArrowUpCircle, ArrowDownCircle, Users, Trash2, Edit2, Clock, Target, Upload,
   Utensils, Car, Film, HeartPulse, ShoppingBag, Briefcase, GraduationCap, Wallet,
-  Gift, Smartphone, PawPrint, MoreHorizontal, Sparkles, Megaphone, Pin, FileText, Palette, Award, Search, Settings,
+  Gift, Smartphone, PawPrint, MoreHorizontal, Sparkles, Megaphone, Pin, FileText, Palette, Search, Settings,
 } from 'lucide-react';
 import Papa from 'papaparse';
 import { supabase } from './supabaseClient';
@@ -68,6 +68,18 @@ function endOfMonth(date) { return new Date(date.getFullYear(), date.getMonth() 
 const MONTH_ABBR = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 function monthLabel(date) { return `${MONTH_ABBR[date.getMonth()]}/${String(date.getFullYear()).slice(-2)}`; }
 function monthKey(date) { return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}`; }
+
+// Nome do mês escrito por extenso. Lista à mão em vez de toLocaleDateString
+// porque o pt-BR devolve minúsculo ("julho") e, em alguns ambientes, "julho de
+// 2026" quando combinado com o ano — aqui o texto precisa ser exato.
+const MONTH_NAMES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+function mesAnoLabel(date) { return `${MONTH_NAMES[date.getMonth()]} ${date.getFullYear()}`; }
+// Distância em meses de calendário (ignora o dia), pode ser negativa. Nome
+// diferente de monthsBetween (mais abaixo), que devolve a LISTA de meses.
+function monthsDiff(from, to) {
+  return (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
+}
 
 function formatCurrency(v) {
   return (Number(v) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -399,6 +411,9 @@ function sumByPeriod(transactions, tipo, rangeStart, rangeEnd) {
   let total = 0;
   let count = 0;
   const byCategory = {};
+  // Quantas ocorrências cada categoria teve — é o divisor do ticket médio por
+  // produto (valor faturado ÷ nº de cobranças no período).
+  const countByCategory = {};
   transactions.forEach((tx) => {
     if (tx.tipo !== tipo) return;
     const occ = expandOccurrences(tx, rangeStart, rangeEnd);
@@ -407,8 +422,9 @@ function sumByPeriod(transactions, tipo, rangeStart, rangeEnd) {
     total += value;
     count += occ.length;
     byCategory[tx.categoriaId] = (byCategory[tx.categoriaId] || 0) + value;
+    countByCategory[tx.categoriaId] = (countByCategory[tx.categoriaId] || 0) + occ.length;
   });
-  return { total: round2(total), count, byCategory };
+  return { total: round2(total), count, byCategory, countByCategory };
 }
 
 function getPeriodRange(period) {
@@ -434,6 +450,19 @@ function getPeriodRange(period) {
     default:
       return { start: startOfMonth(today), end: endOfMonth(today) };
   }
+}
+
+// Nome legível do período em foco. "Este mês" por si só não diz que mês é —
+// este rótulo diz, e vale para todas as opções do seletor.
+function periodLabel(period) {
+  const { start, end } = getPeriodRange(period);
+  if (period.type === 'custom') return `${formatDateBR(toISODate(start))} a ${formatDateBR(toISODate(end))}`;
+  if (period.type === 'ano_atual') return `Ano de ${start.getFullYear()}`;
+  if (start.getFullYear() === end.getFullYear() && start.getMonth() === end.getMonth()) return mesAnoLabel(start);
+  if (start.getFullYear() === end.getFullYear()) {
+    return `${MONTH_NAMES[start.getMonth()]} a ${MONTH_NAMES[end.getMonth()]} ${start.getFullYear()}`;
+  }
+  return `${mesAnoLabel(start)} a ${mesAnoLabel(end)}`;
 }
 
 // Janela imediatamente anterior, do mesmo tamanho — base da comparação "vs
@@ -478,17 +507,6 @@ function variacaoPct(atual, anterior) {
   return ((atual - anterior) / Math.abs(anterior)) * 100;
 }
 
-// Saldo acumulado: tudo que entrou menos tudo que saiu, desde sempre até hoje.
-// Não é saldo bancário conciliado — o app não tem conta bancária integrada —
-// e o cartão diz isso na dica de contexto.
-function saldoAcumuladoAteHoje(transactions) {
-  const inicio = new Date(2000, 0, 1);
-  const hoje = new Date();
-  const rec = sumByPeriod(transactions, 'receita', inicio, hoje).total;
-  const desp = sumByPeriod(transactions, 'despesa', inicio, hoje).total;
-  return round2(rec - desp);
-}
-
 // Entradas x saídas mês a mês, no formato que o gráfico de fluxo de caixa usa.
 // monthsForward > 0 estende a série para meses futuros (períodos "Próx. N meses").
 function buildCashFlowRows(transactions, monthsBack, monthsForward = 0) {
@@ -497,18 +515,22 @@ function buildCashFlowRows(transactions, monthsBack, monthsForward = 0) {
   }));
 }
 
-// Saldo acumulado (desde 2000) mês a mês — usado quando o usuário clica no
-// cartão "Saldo acumulado" pra ver a evolução em vez do total fixo de hoje.
-function buildAccumulatedBalanceRows(transactions, monthsBack, monthsForward = 0) {
-  const today = new Date();
-  const inicio = new Date(2000, 0, 1);
+// Quebra o período escolhido em meses, recortando o primeiro e o último mês nas
+// datas exatas do período — assim a soma das linhas fecha com os cartões de
+// Receitas/Despesas/Resultado, em vez de estourar pelas bordas do mês.
+function buildPeriodMonthlyRows(transactions, range) {
   const rows = [];
-  for (let i = -(monthsBack - 1); i <= monthsForward; i += 1) {
-    const m = addMonths(startOfMonth(today), i);
-    const re = endOfMonth(m);
-    const rec = sumByPeriod(transactions, 'receita', inicio, re).total;
-    const desp = sumByPeriod(transactions, 'despesa', inicio, re).total;
-    rows.push({ key: monthKey(m), label: monthLabel(m), saldo: round2(rec - desp) });
+  let cursor = startOfMonth(range.start);
+  let safety = 0;
+  while (cursor <= range.end && safety < 240) {
+    const rs = cursor > range.start ? cursor : range.start;
+    const fimMes = endOfMonth(cursor);
+    const re = fimMes < range.end ? fimMes : range.end;
+    const receitas = sumByPeriod(transactions, 'receita', rs, re).total;
+    const despesas = sumByPeriod(transactions, 'despesa', rs, re).total;
+    rows.push({ key: monthKey(cursor), label: mesAnoLabel(cursor), receitas, despesas, saldo: round2(receitas - despesas) });
+    cursor = addMonths(cursor, 1);
+    safety += 1;
   }
   return rows;
 }
@@ -681,27 +703,6 @@ function clientesComReajustePendente(clientes, diasJanela = 30) {
     })
     .map((c) => ({ ...c, atrasado: c.proximoReajuste < hojeISO }))
     .sort((a, b) => a.proximoReajuste.localeCompare(b.proximoReajuste));
-}
-
-// Próximos vencimentos: junta a próxima ocorrência de cada recorrente ativa
-// (calculada na hora, não existe uma linha por mês) com as contas pontuais
-// em aberto (pago = false) que já têm vencimento definido. Ordenado por data.
-function buildProximosVencimentos(transactions, diasJanela = 45) {
-  const hoje = new Date(new Date().setHours(0, 0, 0, 0));
-  const fim = addDays(hoje, diasJanela);
-  const linhas = [];
-  transactions.forEach((t) => {
-    if (t.status !== 'aprovado') return;
-    if (t.recorrente) {
-      if (getRecurrenceStatus(t) !== 'ativo') return;
-      const occ = expandOccurrences(t, hoje, fim);
-      if (occ.length === 0) return;
-      linhas.push({ id: t.id, data: toISODate(occ[0]), tipo: t.tipo, valor: t.valor, descricao: t.descricao, clienteNome: t.clienteNome, recorrente: true });
-    } else if (t.pago === false && t.dataVencimento) {
-      linhas.push({ id: t.id, data: t.dataVencimento, tipo: t.tipo, valor: t.valor, descricao: t.descricao, clienteNome: t.clienteNome, recorrente: false, atrasado: t.dataVencimento < toISODate(hoje) });
-    }
-  });
-  return linhas.sort((a, b) => a.data.localeCompare(b.data));
 }
 
 // Progressão de urgência do relatório de vencimentos — tempo estimado pelo
@@ -1108,6 +1109,9 @@ function PeriodSelector({ value, onChange }) {
           <input type="date" value={value.end} onChange={(e) => changeEnd(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
         </div>
       )}
+      <div style={{ marginTop: 10, fontSize: 'var(--fs-body)', fontWeight: 700 }}>
+        Mostrando: <span style={{ color: 'var(--primary-text)' }}>{periodLabel(value)}</span>
+      </div>
     </div>
   );
 }
@@ -1997,6 +2001,8 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
   // Qual cartão de indicador está "em foco" — controla o que aparece no
   // gráfico de evolução logo abaixo (clique de novo no mesmo cartão desliga).
   const [focusMetric, setFocusMetric] = useState(null);
+  const [resumoMode, setResumoMode] = useState('total');
+  const [rankingCompleto, setRankingCompleto] = useState(false);
   function toggleFocus(key) {
     setFocusMetric((cur) => (cur === key ? null : key));
   }
@@ -2014,28 +2020,32 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
   const varReceitas = variacaoPct(receitas.total, receitasAnt.total);
   const varDespesas = variacaoPct(despesas.total, despesasAnt.total);
   const varSaldo = variacaoPct(saldo, round2(receitasAnt.total - despesasAnt.total));
-  const saldoAcumulado = saldoAcumuladoAteHoje(txs);
 
-  // A janela do gráfico de evolução acompanha o período escolhido no topo,
-  // incluindo meses futuros quando o período escolhido é "Próx. N meses".
-  const chartWindow = {
-    ultimos_3: { back: 3, forward: 0 },
-    proximos_3: { back: 1, forward: 3 },
-    proximos_6: { back: 1, forward: 6 },
-    ano_atual: { back: 12, forward: 0 },
-  }[period.type] || { back: 6, forward: 0 };
+  // Meses reais do período escolhido — base da tabela "ver mês a mês" e da
+  // janela do gráfico.
+  const mesesPeriodo = buildPeriodMonthlyRows(txs, range);
+  const periodoMultiMes = mesesPeriodo.length > 1;
+  const incluiFuturo = range.end > endOfMonth(new Date());
+
+  // A janela do gráfico sai do próprio período, não de uma tabela fixa: back e
+  // forward são distâncias em meses até o mês atual e podem ser negativas
+  // quando o período todo está no passado — o laço dos build* aceita isso.
+  // Período de um único mês mantém 6 meses de histórico, senão o gráfico
+  // viraria um ponto só, sem tendência nenhuma.
+  const chartWindow = periodoMultiMes
+    ? { back: 1 - monthsDiff(new Date(), range.start), forward: monthsDiff(new Date(), range.end) }
+    : { back: 6, forward: 0 };
   const cashFlowRows = buildCashFlowRows(txs, chartWindow.back, chartWindow.forward);
   const resultadoRows = buildCompanyEvolution(txs, chartWindow.back, chartWindow.forward);
-  const acumuladoRows = buildAccumulatedBalanceRows(txs, chartWindow.back, chartWindow.forward);
 
-  // Ranking de produtos/serviços mais vendidos no período (por categoria de receita).
+  // Ranking de produtos/serviços do período (por categoria de receita), do mais
+  // vendido ao menos vendido. Ordena por valor faturado, não por quantidade.
   const topProdutos = Object.entries(receitas.byCategory)
     .map(([catId, val]) => {
       const c = data.categories.find((cc) => cc.id === catId);
-      return { id: catId, nome: c?.nome || 'Outros', valor: val };
+      return { id: catId, nome: c?.nome || 'Outros', valor: val, ticket: receitas.countByCategory?.[catId] ? round2(val / receitas.countByCategory[catId]) : null };
     })
-    .sort((a, b) => b.valor - a.valor)
-    .slice(0, 5);
+    .sort((a, b) => b.valor - a.valor);
 
   // Contas a pagar/receber em aberto — só lançamentos pontuais marcados como
   // "não pago ainda", com vencimento. Recorrente não entra aqui (ver
@@ -2048,7 +2058,6 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
   const somaPagarHoje = round2(pagarHoje.reduce((s, t) => s + t.valor, 0));
   const somaPagarAtraso = round2(pagarAtraso.reduce((s, t) => s + t.valor, 0));
   const somaReceberAtraso = round2(receberAtraso.reduce((s, t) => s + t.valor, 0));
-  const proximosVencimentos = buildProximosVencimentos(txs);
 
   const pendentes = txs.filter((t) => t.recorrente && getRecurrenceStatus(t) === 'pendente');
   // Vendas lançadas por vendedores esperando o admin revisar e aprovar.
@@ -2066,13 +2075,9 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
     })
     .sort((a, b) => b.value - a.value);
 
-  const recentTx = [...txs]
-    .filter((t) => !t.recorrente || getRecurrenceStatus(t) !== 'pendente')
-    .sort((a, b) => new Date(b.data) - new Date(a.data))
-    .slice(0, 5);
-
-  const ticketMedioReceita = receitas.count > 0 ? round2(receitas.total / receitas.count) : 0;
-  const ticketMedioDespesa = despesas.count > 0 ? round2(despesas.total / despesas.count) : 0;
+  // Ticket médio por produto: mesmo conjunto do ranking, mas ordenado pelo
+  // ticket em vez do faturamento total — produto caro de baixo volume sobe.
+  const ticketPorProduto = topProdutos.filter((p) => p.ticket != null).sort((a, b) => b.ticket - a.ticket);
 
   // Visão geral da empresa (somente admin): evolução, crescimento, cancelamentos e ranking.
   const evolution = buildCompanyEvolution(txs, 6);
@@ -2081,7 +2086,9 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
   const growthPct = (prevM && prevM.receita > 0) ? round2(((lastM.receita - prevM.receita) / prevM.receita) * 100) : null;
   const cancelamentos = buildCancelamentosPorMes(txs, 6);
   const totalCancelamentos6m = cancelamentos.reduce((s, c) => s + c.count, 0);
-  const ranking = buildVendedorRanking(txs, data.vendedores, range.start, range.end, data.planos);
+  // Só vendedores ativos entram no ranking — os inativos do cadastro são
+  // ex-funcionários e colaboradores de outras funções, não vendedores.
+  const ranking = buildVendedorRanking(txs, data.vendedores.filter((v) => v.ativo !== false), range.start, range.end, data.planos);
   const nenhumWidgetAtivo = role === 'admin' && !widgets.categorias && !widgets.ticketMedio && !widgets.receitaDespesa && !widgets.rankingVendedores && !widgets.cancelamentos;
 
   // Ranking visível pro próprio vendedor: só nome, comissão e vendas de quem
@@ -2178,16 +2185,6 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
 
       <div className="lomuz-kpi-grid" style={{ marginTop: 14 }}>
         <StatCard
-          title="Saldo acumulado"
-          value={formatCurrency(saldoAcumulado)}
-          icon={Wallet}
-          tone={saldoAcumulado >= 0 ? 'neutral' : 'danger'}
-          hint="Todas as receitas menos todas as despesas aprovadas, desde o início até hoje. Não é saldo de conta bancária — o app não tem conta bancária integrada. Toque para ver a evolução mês a mês."
-          footer="Desde o início até hoje · toque para ver a evolução"
-          onClick={() => toggleFocus('saldo')}
-          active={focusMetric === 'saldo'}
-        />
-        <StatCard
           title="Receitas do período"
           value={formatCurrency(receitas.total)}
           icon={ArrowUpCircle}
@@ -2223,135 +2220,110 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
           onClick={() => toggleFocus('resultado')}
           active={focusMetric === 'resultado'}
         />
-        <StatCard
-          title="Produto mais vendido"
-          value={topProdutos[0]?.nome || '—'}
-          icon={Award}
-          tone="neutral"
-          footer={topProdutos[0] ? `${formatCurrency(topProdutos[0].valor)} no período · ranking abaixo do gráfico` : 'Sem vendas categorizadas neste período'}
-        />
       </div>
 
-      <SectionTitle icon={Receipt}>Detalhes e movimentação</SectionTitle>
-      <div className="lomuz-main-grid">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <CashFlowChart
-            rows={focusMetric === 'saldo' ? acumuladoRows : focusMetric === 'resultado' ? resultadoRows : cashFlowRows}
-            mode={focusMetric === 'saldo' ? 'saldo' : focusMetric === 'resultado' ? 'resultado' : 'fluxo'}
-            emphasize={focusMetric === 'receitas' ? 'entradas' : focusMetric === 'despesas' ? 'saidas' : null}
-            title={
-              focusMetric === 'saldo' ? 'Evolução do saldo acumulado'
-                : focusMetric === 'resultado' ? 'Evolução do resultado mensal'
-                  : focusMetric === 'receitas' ? 'Fluxo de caixa — receitas em destaque'
-                    : focusMetric === 'despesas' ? 'Fluxo de caixa — despesas em destaque'
-                      : 'Fluxo de caixa'
-            }
-          />
-
-          <Panel title="Ranking de produtos mais vendidos">
-            {topProdutos.length === 0 ? (
-              <div style={{ padding: '10px 4px' }}>
-                <EmptyBlock icon={Tag} title="Nenhuma receita categorizada" desc="Quando houver vendas aprovadas com categoria neste período, o ranking aparece aqui." />
+      {periodoMultiMes && (
+        <>
+          <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+            <Chip active={resumoMode === 'total'} onClick={() => setResumoMode('total')}>Total do período</Chip>
+            <Chip active={resumoMode === 'mensal'} onClick={() => setResumoMode('mensal')}>Ver mês a mês</Chip>
+          </div>
+          {resumoMode === 'mensal' && (
+            <Card style={{ padding: 0, marginTop: 10 }}>
+              <div className="lomuz-table-wrap">
+                <table className="lomuz-table">
+                  <caption className="lomuz-sr-only">
+                    Receitas, despesas e resultado de cada mês do período {periodLabel(period)}.
+                  </caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Mês</th>
+                      <th scope="col" style={{ textAlign: 'right' }}>Receitas</th>
+                      <th scope="col" style={{ textAlign: 'right' }}>Despesas</th>
+                      <th scope="col" style={{ textAlign: 'right' }}>Resultado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mesesPeriodo.map((m) => (
+                      <tr key={m.key}>
+                        <td style={{ whiteSpace: 'nowrap' }}>{m.label}</td>
+                        <td className="lomuz-num" style={{ textAlign: 'right', color: 'var(--success)', whiteSpace: 'nowrap' }}>{formatCurrency(m.receitas)}</td>
+                        <td className="lomuz-num" style={{ textAlign: 'right', color: 'var(--danger)', whiteSpace: 'nowrap' }}>{formatCurrency(m.despesas)}</td>
+                        <td className="lomuz-num" style={{ textAlign: 'right', fontWeight: 700, color: m.saldo >= 0 ? 'var(--primary-text)' : 'var(--danger)', whiteSpace: 'nowrap' }}>{formatCurrency(m.saldo)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>Total do período</td>
+                      <td className="lomuz-num" style={{ textAlign: 'right', fontWeight: 700, color: 'var(--success)', whiteSpace: 'nowrap' }}>{formatCurrency(receitas.total)}</td>
+                      <td className="lomuz-num" style={{ textAlign: 'right', fontWeight: 700, color: 'var(--danger)', whiteSpace: 'nowrap' }}>{formatCurrency(despesas.total)}</td>
+                      <td className="lomuz-num" style={{ textAlign: 'right', fontWeight: 700, color: saldo >= 0 ? 'var(--primary-text)' : 'var(--danger)', whiteSpace: 'nowrap' }}>{formatCurrency(saldo)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
               </div>
-            ) : (
-              <div style={{ padding: '6px 4px' }}>
-                {topProdutos.map((p, i) => (
-                  <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderBottom: i === topProdutos.length - 1 ? 'none' : '1px solid var(--border)' }}>
+              {incluiFuturo && (
+                <p style={{ margin: 0, padding: '12px 16px', borderTop: '1px solid var(--border)', fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', lineHeight: 1.5 }}>
+                  Este período inclui meses que ainda não aconteceram: esses valores são projeção dos contratos já cadastrados.
+                </p>
+              )}
+            </Card>
+          )}
+        </>
+      )}
+
+      <SectionTitle icon={Receipt}>Detalhes e movimentação</SectionTitle>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <CashFlowChart
+          rows={focusMetric === 'resultado' ? resultadoRows : cashFlowRows}
+          mode={focusMetric === 'resultado' ? 'resultado' : 'fluxo'}
+          emphasize={focusMetric === 'receitas' ? 'entradas' : focusMetric === 'despesas' ? 'saidas' : null}
+          title={`${focusMetric === 'resultado' ? 'Evolução do resultado mensal'
+            : focusMetric === 'receitas' ? 'Fluxo de caixa — receitas em destaque'
+              : focusMetric === 'despesas' ? 'Fluxo de caixa — despesas em destaque'
+                : 'Fluxo de caixa'} · ${periodoMultiMes ? periodLabel(period) : 'últimos 6 meses'}`}
+        />
+
+        <Panel
+          title={`Ranking de produtos — ${periodLabel(period)}`}
+          action={topProdutos.length > 10 ? (
+            <PanelLink onClick={() => setRankingCompleto((v) => !v)}>
+              {rankingCompleto ? 'Ver menos' : `Ver todos (${topProdutos.length})`}
+            </PanelLink>
+          ) : null}
+        >
+          {topProdutos.length === 0 ? (
+            <div style={{ padding: '10px 4px' }}>
+              <EmptyBlock icon={Tag} title="Nenhuma receita categorizada" desc="Quando houver vendas aprovadas com categoria neste período, o ranking aparece aqui." />
+            </div>
+          ) : (
+            <>
+              <p style={{ margin: 0, padding: '12px 16px 4px', fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', lineHeight: 1.5 }}>
+                Do mais vendido ao menos vendido, pelo valor faturado no período — inclui as parcelas de contratos recorrentes. O ticket médio é esse valor dividido pelo número de cobranças.
+                {incluiFuturo ? ' Este período inclui meses que ainda não aconteceram: esses valores são projeção.' : ''}
+              </p>
+              <div style={{ padding: '4px 4px 6px' }}>
+                {(rankingCompleto ? topProdutos : topProdutos.slice(0, 10)).map((p, i, arr) => (
+                  <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderBottom: i === arr.length - 1 ? 'none' : '1px solid var(--border)' }}>
                     <div style={{ width: 26, height: 26, borderRadius: '50%', background: i === 0 ? 'var(--warning-light)' : 'var(--surface-2)', color: i === 0 ? 'var(--warning-strong)' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 12, flexShrink: 0 }}>
                       {i + 1}
                     </div>
-                    <div style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.nome}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.nome}</div>
+                      <div style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)' }}>
+                        {p.ticket != null ? `Ticket médio ${formatCurrency(p.ticket)}` : 'Ticket médio indisponível'}
+                        {receitas.total > 0 ? ` · ${Math.round((p.valor / receitas.total) * 100)}% do faturamento` : ''}
+                      </div>
+                    </div>
                     <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--success)', whiteSpace: 'nowrap' }}>{formatCurrency(p.valor)}</div>
                   </div>
                 ))}
               </div>
-            )}
-          </Panel>
-        </div>
-
-        <Panel title="Próximos vencimentos">
-          {proximosVencimentos.length === 0 ? (
-            <div style={{ padding: '10px 4px' }}>
-              <EmptyBlock icon={Clock} title="Nada por vencer" desc="Contratos recorrentes ativos e contas em aberto com vencimento aparecem aqui, ordenados por data." />
-            </div>
-          ) : (
-            <div style={{ padding: '6px 4px' }}>
-              {proximosVencimentos.slice(0, 8).map((v) => (
-                <div key={`${v.id}-${v.data}`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', borderBottom: '1px solid var(--border)' }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: 'var(--fs-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {v.clienteNome || v.descricao || (v.tipo === 'receita' ? 'Receita' : 'Despesa')}
-                    </div>
-                    <div style={{ fontSize: 'var(--fs-small)', color: v.atrasado ? 'var(--negative)' : 'var(--ink-soft)', fontWeight: v.atrasado ? 700 : 400 }}>
-                      {formatDateBR(v.data)}{v.recorrente ? ' · recorrente' : ''}{v.atrasado ? ' · atrasado' : ''}
-                    </div>
-                  </div>
-                  <div style={{ fontWeight: 700, fontSize: 'var(--fs-body)', color: v.tipo === 'receita' ? 'var(--success)' : 'var(--negative)', whiteSpace: 'nowrap' }}>
-                    {formatCurrency(v.valor)}
-                  </div>
-                </div>
-              ))}
-            </div>
+            </>
           )}
         </Panel>
       </div>
-
-      <Panel
-        title="Movimentações recentes"
-        style={{ marginTop: 16 }}
-        action={<PanelLink onClick={() => onGoTo('lancamentos')}>Ver todas</PanelLink>}
-      >
-          {recentTx.length === 0 ? (
-            <EmptyBlock
-              icon={Receipt}
-              title="Nenhuma movimentação"
-              desc="Os lançamentos deste período aparecem aqui em ordem de data."
-            />
-          ) : (
-            <div className="lomuz-table-wrap">
-              <table className="lomuz-table">
-                <caption className="lomuz-sr-only">
-                  Últimas movimentações do período, com data, descrição, categoria, tipo e valor.
-                </caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Data</th>
-                    <th scope="col">Descrição</th>
-                    <th scope="col">Categoria</th>
-                    <th scope="col">Tipo</th>
-                    <th scope="col" style={{ textAlign: 'right' }}>Valor</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentTx.map((t) => {
-                    const c = data.categories.find((cc) => cc.id === t.categoriaId);
-                    const entrada = t.tipo === 'receita';
-                    return (
-                      <tr key={t.id}>
-                        <td className="lomuz-num" style={{ whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{formatDateBR(t.data)}</td>
-                        <td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {t.descricao || t.clienteNome || c?.nome || 'Sem descrição'}
-                        </td>
-                        <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{c?.nome || '—'}</td>
-                        <td>
-                          <StatusBadge tone={entrada ? 'success' : 'danger'} icon={entrada ? ArrowUpCircle : ArrowDownCircle}>
-                            {entrada ? 'Entrada' : 'Saída'}
-                          </StatusBadge>
-                        </td>
-                        <td
-                          className="lomuz-num"
-                          style={{ textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap', color: entrada ? 'var(--success)' : 'var(--danger)' }}
-                        >
-                          {entrada ? '' : '− '}{formatCurrency(t.valor)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-      </Panel>
 
       <MuralCard orientacoes={data.orientacoes} role={role} onEdit={onEditMural} />
 
@@ -2390,11 +2362,6 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
             </>
           )}
 
-          <SectionTitle icon={Receipt} action={{ label: 'Ver todos', onClick: () => onGoTo('lancamentos') }}>Últimos lançamentos</SectionTitle>
-          <Card style={{ padding: 0 }}>
-            {recentTx.length === 0 && <div style={{ padding: 16, fontSize: 13, color: 'var(--ink-soft)' }}>Nada por aqui neste período.</div>}
-            {recentTx.map((t, i) => <TransactionRow key={t.id} tx={t} category={data.categories.find((c) => c.id === t.categoriaId)} last={i === recentTx.length - 1} />)}
-          </Card>
 
           {role === 'admin' && (
             <>
@@ -2413,21 +2380,30 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
 
               {widgets.ticketMedio && (
                 <>
-                  <SectionTitle icon={Receipt}>Ticket médio</SectionTitle>
-                  <Card>
-                    <div style={{ display: 'flex', gap: 28 }}>
-                      <div>
-                        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)' }}>Receita</div>
-                        <div style={{ fontWeight: 700, fontSize: 20, color: 'var(--positive)', margin: '4px 0 2px' }}>{formatCurrency(ticketMedioReceita)}</div>
-                        <div style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)' }}>{receitas.count} lançamento(s)</div>
-                      </div>
-                      <div>
-                        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)' }}>Despesa</div>
-                        <div style={{ fontWeight: 700, fontSize: 20, color: 'var(--negative)', margin: '4px 0 2px' }}>{formatCurrency(ticketMedioDespesa)}</div>
-                        <div style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)' }}>{despesas.count} lançamento(s)</div>
-                      </div>
-                    </div>
-                  </Card>
+                  <SectionTitle icon={Receipt}>Ticket médio por produto</SectionTitle>
+                  {ticketPorProduto.length === 0 ? (
+                    <Card><p style={{ fontSize: 13, color: 'var(--ink-soft)', margin: 0 }}>Nenhuma receita categorizada neste período.</p></Card>
+                  ) : (
+                    <Card style={{ padding: 0 }}>
+                      <p style={{ margin: 0, padding: '12px 16px 4px', fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', lineHeight: 1.5 }}>
+                        Valor faturado dividido pelo número de cobranças de cada produto no período, do maior ticket para o menor.
+                      </p>
+                      {ticketPorProduto.map((p, i) => (
+                        <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: i === ticketPorProduto.length - 1 ? 'none' : '1px solid var(--border)' }}>
+                          <div style={{ width: 26, height: 26, borderRadius: '50%', background: i === 0 ? 'var(--warning-light)' : 'var(--surface-2)', color: i === 0 ? 'var(--warning-strong)' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 12, flexShrink: 0 }}>
+                            {i + 1}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.nome}</div>
+                            <div style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)' }}>
+                              {receitas.countByCategory[p.id]} cobrança(s) · {formatCurrency(p.valor)} no total
+                            </div>
+                          </div>
+                          <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--positive)', whiteSpace: 'nowrap' }}>{formatCurrency(p.ticket)}</div>
+                        </div>
+                      ))}
+                    </Card>
+                  )}
                 </>
               )}
 
@@ -4150,10 +4126,11 @@ const AJUDA_SECOES = [
     titulo: 'Visão geral',
     todos: true,
     itens: [
-      ['O que são os cartões do topo', 'Saldo acumulado é tudo que entrou menos tudo que saiu, desde sempre até hoje — não é saldo de banco. Receitas, Despesas e Resultado se referem só ao período escolhido logo acima deles.'],
-      ['Trocar o período', 'Os botões "Este mês", "Últimos 3 meses", "Próx. 3 meses" e afins mudam todos os números e gráficos da tela de uma vez. Ao entrar, o sistema já mostra o mês atual.'],
+      ['O que são os cartões do topo', 'São três números do período escolhido: Receitas (tudo que entrou), Despesas (tudo que saiu) e Resultado (receitas menos despesas). Tocar num cartão muda o gráfico abaixo para destacar aquele número.'],
+      ['Trocar o período', 'Os botões "Este mês", "Últimos 3 meses", "Próx. 3 meses" e afins mudam todos os números e gráficos da tela de uma vez. Logo abaixo dos botões aparece escrito qual período está na tela — por exemplo "Julho 2026". Ao entrar, o sistema já mostra o mês atual.'],
+      ['Ver mês a mês', 'Quando o período escolhido tem mais de um mês, aparece o botão "Ver mês a mês", que abre uma tabela com receitas, despesas e resultado de cada mês. A última linha da tabela fecha com os números dos cartões.'],
       ['Cartões coloridos de aviso', 'Amarelo é atenção, vermelho é urgente. Eles só aparecem quando existe algo de fato precisando de você — se não aparecerem, não há pendência.'],
-      ['Produto mais vendido', 'Mostra qual serviço rendeu mais no período. O ranking completo fica logo abaixo do gráfico de fluxo de caixa.'],
+      ['Ranking de produtos', 'Abaixo do gráfico de fluxo de caixa, a lista mostra os produtos do mais vendido ao menos vendido, pelo valor faturado no período, com o ticket médio de cada um.'],
     ],
   },
   {
@@ -5074,7 +5051,7 @@ export default function App() {
           <Skeleton width={200} height={26} />
           <Skeleton width={300} height={14} style={{ marginTop: 8, marginBottom: 22 }} />
           <div className="lomuz-kpi-grid">
-            <StatCardSkeleton /><StatCardSkeleton /><StatCardSkeleton /><StatCardSkeleton /><StatCardSkeleton />
+            <StatCardSkeleton /><StatCardSkeleton /><StatCardSkeleton />
           </div>
           <div className="lomuz-main-grid">
             <Skeleton height={320} radius="var(--radius-lg)" />
