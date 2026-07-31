@@ -58,9 +58,18 @@ function addDays(date, days) {
   d.setDate(d.getDate() + days);
   return d;
 }
+// Soma meses SEM deixar o dia transbordar pro mês seguinte. O `setMonth` puro do
+// JavaScript faz 31/07 menos 5 meses virar 03/03 (porque "31 de fevereiro" não
+// existe e ele rola pra frente) — o que, num dia 29/30/31, deslocava em um mês
+// inteiro o período anterior da comparação e a data das parcelas de uma
+// recorrência. Quando o dia não existe no mês de destino, cai no último dia dele.
 function addMonths(date, months) {
+  const ano = date.getFullYear();
+  const mes = date.getMonth() + months;
+  const diaAlvo = date.getDate();
+  const ultimoDiaDoMesAlvo = new Date(ano, mes + 1, 0).getDate();
   const d = new Date(date);
-  d.setMonth(d.getMonth() + months);
+  d.setFullYear(ano, mes, Math.min(diaAlvo, ultimoDiaDoMesAlvo));
   return d;
 }
 function startOfMonth(date) { return new Date(date.getFullYear(), date.getMonth(), 1); }
@@ -198,7 +207,7 @@ function planoToRow(p) {
     valor: p.valor || 0,
     categoria_id: p.categoriaId || null,
     servico_id: p.servicoId || null,
-    comissao_percentual: p.comissaoPercentual || 0,
+    comissao_percentual: (p.comissaoPercentual === '' || p.comissaoPercentual == null) ? null : Number(p.comissaoPercentual),
     contrato_meses: p.contratoMeses || null,
     recorrente: !!p.recorrente,
     frequencia: p.frequencia || null,
@@ -212,7 +221,7 @@ function rowToPlano(row) {
     valor: Number(row.valor) || 0,
     categoriaId: row.categoria_id,
     servicoId: row.servico_id,
-    comissaoPercentual: Number(row.comissao_percentual) || 0,
+    comissaoPercentual: row.comissao_percentual == null ? null : Number(row.comissao_percentual),
     contratoMeses: row.contrato_meses,
     recorrente: !!row.recorrente,
     frequencia: row.frequencia || 'mensal',
@@ -341,11 +350,14 @@ function rowToOrientacao(row) {
 }
 
 // Comissão que vale para uma venda: ajuste do admin > comissão do plano
-// negociado > comissão padrão do vendedor.
+// negociado > comissão padrão do vendedor. Plano com comissão em branco não
+// entra na disputa — antes um plano sem comissão definida gravava 0 e zerava a
+// comissão do vendedor sem ninguém ter pedido. Zero explícito continua valendo
+// como "esse plano não paga comissão".
 function comissaoDaVenda(tx, vendedor, planos) {
   if (tx.comissaoPercentual != null) return tx.comissaoPercentual;
   const plano = tx.planoId ? (planos || []).find((p) => p.id === tx.planoId) : null;
-  if (plano) return plano.comissaoPercentual || 0;
+  if (plano && plano.comissaoPercentual != null) return plano.comissaoPercentual;
   return vendedor?.comissaoPercentual || 0;
 }
 function vendedorToRow(v) {
@@ -399,16 +411,20 @@ function expandOccurrences(tx, rangeStart, rangeEnd) {
     : rangeEnd;
   const maxCount = tx.repeticoes ? Number(tx.repeticoes) : Infinity;
   const occurrences = [];
-  let current = new Date(start);
+  // Cada parcela é contada a partir da data original do contrato (start + N
+  // meses), não somando um mês sobre a parcela anterior. A diferença aparece em
+  // contrato do dia 29/30/31: somando em cadeia, um contrato do dia 31 caía em
+  // 28/02 e daí em diante ficava presa no dia 28 pra sempre. Ancorado na
+  // origem, ele volta pro dia 31 no mês seguinte.
   let count = 0;
-  let safety = 0;
-  while (current <= effectiveEnd && count < maxCount && safety < 1200) {
-    if (current >= rangeStart) occurrences.push(new Date(current));
+  for (let safety = 0; safety < 1200; safety += 1) {
+    if (count >= maxCount) break;
+    const current = tx.frequencia === 'semanal'
+      ? addDays(start, 7 * count)
+      : addMonths(start, count * (tx.frequencia === 'anual' ? 12 : 1));
+    if (current > effectiveEnd) break;
+    if (current >= rangeStart) occurrences.push(current);
     count += 1;
-    safety += 1;
-    if (tx.frequencia === 'semanal') current = addDays(current, 7);
-    else if (tx.frequencia === 'anual') current = addMonths(current, 12);
-    else current = addMonths(current, 1);
   }
   return occurrences;
 }
@@ -798,6 +814,17 @@ function urgenciaAtraso(diasAtraso) {
   return { tone: 'danger', label: 'Crítico' };
 }
 
+// Meses inteiros desde o último pagamento de uma recorrência. O atraso do ciclo
+// sozinho nunca passa de ~31 dias, então um contrato marcado ativo mas sem
+// receber desde 2023 aparecia igual a um que atrasou uma semana. Este número é
+// o que separa "esqueceu de pagar" de "parou de pagar e ninguém cancelou".
+function mesesSemPagamento(tx, hoje = new Date()) {
+  if (!tx.ultimaConfirmacao) return null;
+  const u = parseISODate(tx.ultimaConfirmacao);
+  const meses = (hoje.getFullYear() - u.getFullYear()) * 12 + (hoje.getMonth() - u.getMonth());
+  return meses > 0 ? meses : 0;
+}
+
 // Ciclo de vencimento atual de uma recorrência: o dia de vencimento é o dia
 // do mês da data original do contrato (ex.: contrato datado 2026-07-01
 // vence todo dia 1º). Sem confirmação de recebimento desde esse dia, conta
@@ -824,16 +851,28 @@ function buildRelatorioVencimentos(transactions, hoje = new Date()) {
       linhas.push({
         id: t.id, tipo: t.tipo, recorrente: true, clienteNome: t.clienteNome, descricao: t.descricao, valor: t.valor,
         diaVencimento: ciclo.diaVencimento, vencimento: ciclo.vencimentoCiclo, diasAtraso: ciclo.diasAtraso, confirmado: ciclo.confirmado,
+        ultimoPagamento: t.ultimaConfirmacao || null, mesesParado: mesesSemPagamento(t, hoje),
       });
     } else if (t.pago === false && t.dataVencimento) {
       const diasAtraso = Math.max(0, Math.round((hoje - parseISODate(t.dataVencimento)) / 86400000));
       linhas.push({
         id: t.id, tipo: t.tipo, recorrente: false, clienteNome: t.clienteNome, descricao: t.descricao, valor: t.valor,
         vencimento: t.dataVencimento, diasAtraso, confirmado: false,
+        ultimoPagamento: null, mesesParado: null,
       });
     }
   });
-  return linhas.sort((a, b) => b.diasAtraso - a.diasAtraso);
+  // Contrato parado há meses vem antes de tudo: é dinheiro que a empresa acha
+  // que recebe e não recebe. Depois deles, ordem por dias de atraso.
+  return linhas.sort((a, b) => (b.mesesParado || 0) - (a.mesesParado || 0) || b.diasAtraso - a.diasAtraso);
+}
+
+// Recorrência ativa que não recebe há 3 meses ou mais: a empresa conta esse
+// dinheiro no MRR e ele não entra. 3 meses porque 1 ou 2 ainda cabe em atraso
+// comum (boleto, troca de titularidade); a partir do terceiro é padrão.
+const MESES_PARA_CONTRATO_PARADO = 3;
+function contratosParados(linhas) {
+  return (linhas || []).filter((l) => l.recorrente && (l.mesesParado || 0) >= MESES_PARA_CONTRATO_PARADO);
 }
 
 // Cancelamentos de recorrências por mês, últimos N meses.
@@ -1695,11 +1734,16 @@ function TransactionForm({ draft, categories, role, vendedores, planos, forneced
       )}
 
       {isVenda && planosAtivos.length > 0 && (
-        <Field label="Plano negociado" hint={planoEscolhido ? `Comissão do plano: ${planoEscolhido.comissaoPercentual}%. Preencheu os campos abaixo — pode ajustar se precisar.` : 'Escolha um plano para preencher valor, categoria e duração automaticamente.'}>
+        <Field
+          label="Plano negociado"
+          hint={planoEscolhido
+            ? `${planoEscolhido.comissaoPercentual != null ? `Comissão do plano: ${planoEscolhido.comissaoPercentual}%.` : 'Este plano não define comissão — vale a comissão padrão do vendedor.'} Preencheu os campos abaixo — pode ajustar se precisar.`
+            : 'Escolha um plano para preencher valor, categoria e duração automaticamente.'}
+        >
           <select value={local.planoId || ''} onChange={(e) => escolherPlano(e.target.value)} style={inputStyle}>
             <option value="">Sem plano (preencher manualmente)</option>
             {planosAtivos.map((p) => (
-              <option key={p.id} value={p.id}>{p.nome} · {formatCurrency(p.valor)} · {p.comissaoPercentual}%</option>
+              <option key={p.id} value={p.id}>{p.nome} · {formatCurrency(p.valor)}{p.comissaoPercentual != null ? ` · ${p.comissaoPercentual}%` : ''}</option>
             ))}
           </select>
         </Field>
@@ -1814,13 +1858,13 @@ function TransactionForm({ draft, categories, role, vendedores, planos, forneced
       {isVenda && role === 'admin' && local.vendedorId && (
         <Field
           label="Comissão desta venda (%)"
-          hint={planoEscolhido
+          hint={(planoEscolhido && planoEscolhido.comissaoPercentual != null)
             ? `Em branco = usa os ${planoEscolhido.comissaoPercentual}% do plano "${planoEscolhido.nome}".`
             : 'Em branco = usa a comissão padrão do vendedor.'}
         >
           <input
             type="number" min="0" max="100" step="0.5"
-            placeholder={planoEscolhido ? `${planoEscolhido.comissaoPercentual}% (do plano)` : 'Padrão do vendedor'}
+            placeholder={(planoEscolhido && planoEscolhido.comissaoPercentual != null) ? `${planoEscolhido.comissaoPercentual}% (do plano)` : 'Padrão do vendedor'}
             value={local.comissaoPercentual ?? ''}
             onChange={(e) => set('comissaoPercentual', e.target.value)}
             style={inputStyle}
@@ -3335,7 +3379,9 @@ function PlanoForm({ plano, categories, servicos, onSubmit, onCancel }) {
   const [valor, setValor] = useState(plano?.valor != null ? String(plano.valor) : '');
   const [categoriaId, setCategoriaId] = useState(plano?.categoriaId || receitaCats[0]?.id || '');
   const [servicoId, setServicoId] = useState(plano?.servicoId || servicosAtivos[0]?.id || '');
-  const [comissao, setComissao] = useState(plano?.comissaoPercentual != null ? String(plano.comissaoPercentual) : '5');
+  // Plano novo já vem sugerindo 5%; plano existente sem comissão definida abre
+  // em branco, senão editar o nome do plano gravaria 5% que ninguém escolheu.
+  const [comissao, setComissao] = useState(plano ? (plano.comissaoPercentual != null ? String(plano.comissaoPercentual) : '') : '5');
   const [contratoMeses, setContratoMeses] = useState(plano?.contratoMeses != null ? String(plano.contratoMeses) : '');
   const [recorrente, setRecorrente] = useState(!!plano?.recorrente);
   const [frequencia, setFrequencia] = useState(plano?.frequencia || 'mensal');
@@ -3352,7 +3398,7 @@ function PlanoForm({ plano, categories, servicos, onSubmit, onCancel }) {
       valor: parseFloat(valor) || 0,
       categoriaId: categoriaId || null,
       servicoId,
-      comissaoPercentual: parseFloat(comissao) || 0,
+      comissaoPercentual: comissao.trim() === '' ? null : (parseFloat(comissao) || 0),
       contratoMeses: contratoMeses ? (parseInt(contratoMeses, 10) || null) : null,
       recorrente,
       frequencia: recorrente ? frequencia : null,
@@ -3368,7 +3414,9 @@ function PlanoForm({ plano, categories, servicos, onSubmit, onCancel }) {
           <Field label="Valor"><CurrencyInput value={valor} onChange={setValor} style={inputStyle} /></Field>
         </div>
         <div style={{ flex: 1 }}>
-          <Field label="Comissão (%)"><input type="number" min="0" max="100" step="0.5" style={inputStyle} value={comissao} onChange={(e) => setComissao(e.target.value)} /></Field>
+          <Field label="Comissão (%)" hint="Em branco = usa a comissão padrão de cada vendedor.">
+            <input type="number" min="0" max="100" step="0.5" style={inputStyle} value={comissao} onChange={(e) => setComissao(e.target.value)} placeholder="do vendedor" />
+          </Field>
         </div>
       </div>
       <Field label="Serviço" hint="O que este plano vende de fato.">
@@ -3915,7 +3963,7 @@ function CategoriasPage({ data, persist, askConfirm, subTab, setSubTab }) {
                       {p.nome}{p.ativo === false && <span style={{ fontWeight: 500, color: 'var(--ink-soft)' }}> (fora de venda)</span>}
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>
-                      {formatCurrency(p.valor)} · comissão {p.comissaoPercentual}%
+                      {formatCurrency(p.valor)} · {p.comissaoPercentual != null ? `comissão ${p.comissaoPercentual}%` : 'comissão do vendedor'}
                       {serv ? ` · ${serv.nome}` : ''}
                       {cat ? ` · ${cat.nome}` : ''}
                       {p.contratoMeses ? ` · ${p.contratoMeses} meses` : ''}
@@ -4514,8 +4562,12 @@ function VencimentosPage({ data, onConfirmarRecebimento, onEditTransaction }) {
   const todasLinhas = buildRelatorioVencimentos(data.transactions);
   const termo = busca.trim().toLowerCase();
 
+  const parados = contratosParados(todasLinhas);
+  const idsParados = new Set(parados.map((l) => l.id));
+
   const linhas = todasLinhas.filter((l) => {
     if (termo && !(l.clienteNome || '').toLowerCase().includes(termo)) return false;
+    if (filterUrgencia === 'parados') return idsParados.has(l.id);
     const urgencia = urgenciaAtraso(l.diasAtraso);
     if (filterUrgencia === 'criticos' && urgencia?.tone !== 'danger') return false;
     if (filterUrgencia === 'atencao' && urgencia?.tone !== 'warning') return false;
@@ -4525,6 +4577,7 @@ function VencimentosPage({ data, onConfirmarRecebimento, onEditTransaction }) {
   const qtdCriticos = todasLinhas.filter((l) => urgenciaAtraso(l.diasAtraso)?.tone === 'danger').length;
   const qtdAtencao = todasLinhas.filter((l) => urgenciaAtraso(l.diasAtraso)?.tone === 'warning').length;
   const qtdEmDia = todasLinhas.length - qtdCriticos - qtdAtencao;
+  const valorParado = round2(parados.reduce((s, l) => s + l.valor, 0));
 
   return (
     <div style={{ paddingTop: 12 }}>
@@ -4532,7 +4585,37 @@ function VencimentosPage({ data, onConfirmarRecebimento, onEditTransaction }) {
         Cada recorrência ativa entra pelo ciclo do mês atual (dia de vencimento = dia da data original do contrato). Sem confirmação de recebimento desde esse dia, o atraso conta e a urgência sobe — é um sinal pro seu acompanhamento, o app não concilia banco automaticamente.
       </p>
 
+      {/* Contrato parado é o problema mais caro desta tela e o mais fácil de
+          passar batido: no atraso do ciclo ele aparece com os mesmos poucos dias
+          de quem só atrasou essa semana. Por isso ganha aviso próprio no topo. */}
+      {parados.length > 0 && (
+        <Card style={{ marginBottom: 14, borderColor: 'var(--negative)', background: 'var(--negative-soft)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, color: 'var(--negative)' }}>
+            <Clock size={16} /> {parados.length} contrato(s) ativo(s) sem receber há {MESES_PARA_CONTRATO_PARADO} meses ou mais — {formatCurrency(valorParado)} por mês
+          </div>
+          <div style={{ fontSize: 'var(--fs-small)', color: 'var(--negative)', marginTop: 6, lineHeight: 1.5 }}>
+            Estão contando como receita recorrente ativa. Ou o pagamento parou e o contrato precisa ser cancelado, ou é cobrança a fazer.
+          </div>
+          <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {parados.slice(0, 8).map((l) => (
+              <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 'var(--fs-body)', color: 'var(--negative)' }}>
+                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {l.clienteNome || l.descricao || 'Sem cliente'} · último pagamento {formatDateBR(l.ultimoPagamento)}
+                </span>
+                <span style={{ flexShrink: 0, fontWeight: 700 }}>{l.mesesParado} meses · {formatCurrency(l.valor)}</span>
+              </div>
+            ))}
+            {parados.length > 8 && (
+              <button onClick={() => setFilterUrgencia('parados')} style={{ alignSelf: 'flex-start', background: 'none', border: 'none', color: 'var(--negative)', fontWeight: 700, fontSize: 'var(--fs-small)', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>
+                Ver todos os {parados.length}
+              </button>
+            )}
+          </div>
+        </Card>
+      )}
+
       <div className="lomuz-kpi-grid" style={{ marginBottom: 14 }}>
+        <StatCard title="Parado" value={String(parados.length)} icon={Clock} tone={parados.length > 0 ? 'danger' : 'success'} footer={`sem receber há ${MESES_PARA_CONTRATO_PARADO}+ meses`} />
         <StatCard title="Crítico" value={String(qtdCriticos)} icon={Clock} tone={qtdCriticos > 0 ? 'danger' : 'neutral'} footer="mais de 10 dias em atraso" />
         <StatCard title="Atenção" value={String(qtdAtencao)} icon={Clock} tone={qtdAtencao > 0 ? 'warning' : 'neutral'} footer="até 10 dias em atraso" />
         <StatCard title="Em dia" value={String(qtdEmDia)} icon={Check} tone="success" footer="vencimento confirmado ou ainda não chegou" />
@@ -4542,6 +4625,7 @@ function VencimentosPage({ data, onConfirmarRecebimento, onEditTransaction }) {
 
       <FilterGroup label="Urgência">
         <Chip active={filterUrgencia === 'todos'} onClick={() => setFilterUrgencia('todos')}>Todos</Chip>
+        <Chip active={filterUrgencia === 'parados'} onClick={() => setFilterUrgencia('parados')}>Parados ({parados.length})</Chip>
         <Chip active={filterUrgencia === 'criticos'} onClick={() => setFilterUrgencia('criticos')}>Críticos</Chip>
         <Chip active={filterUrgencia === 'atencao'} onClick={() => setFilterUrgencia('atencao')}>Atenção</Chip>
       </FilterGroup>
@@ -4560,11 +4644,14 @@ function VencimentosPage({ data, onConfirmarRecebimento, onEditTransaction }) {
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {l.descricao || (l.tipo === 'receita' ? 'Receita' : 'Despesa')} · vence {formatDateBR(l.vencimento)}{l.recorrente ? ' · recorrente' : ''}
+                    {l.ultimoPagamento ? ` · último pagamento ${formatDateBR(l.ultimoPagamento)}` : ''}
                   </div>
                 </div>
                 <div style={{ textAlign: 'right', flexShrink: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 14, color: l.tipo === 'receita' ? 'var(--success)' : 'var(--negative)' }}>{formatCurrency(l.valor)}</div>
-                  {urgencia ? (
+                  {idsParados.has(l.id) ? (
+                    <StatusBadge tone="danger">Parado · {l.mesesParado} meses</StatusBadge>
+                  ) : urgencia ? (
                     <StatusBadge tone={urgencia.tone}>{urgencia.label} · {l.diasAtraso}d</StatusBadge>
                   ) : (
                     <span style={{ fontSize: 11, color: 'var(--ink-soft)' }}>Em dia</span>
@@ -4724,6 +4811,27 @@ function RelatoriosPage({ data, subTab, setSubTab, onConfirmarRecebimento, onEdi
     const recCategoria = sumByKey(txs, 'receita', r.start, r.end, (t) => t.categoriaId);
     const recCliente = sumByKey(txs, 'receita', r.start, r.end, (t) => (t.clienteNome || '').trim() || '__sem__');
 
+    // Crescimento por produto: compara o período escolhido com a janela
+    // imediatamente anterior do mesmo tamanho (a mesma base que os cartões do
+    // painel usam no "vs período anterior"). É conta de tendência, não previsão
+    // de modelo: ordena pela diferença em reais, porque um produto que saiu de
+    // R$ 10 pra R$ 30 cresce 200% e não muda o caixa.
+    const anterior = getPreviousPeriodRange(period);
+    const recCategoriaAnterior = sumByKey(txs, 'receita', anterior.start, anterior.end, (t) => t.categoriaId);
+    const antesPorCat = new Map(recCategoriaAnterior.rows.map((x) => [x.chave, x.valor]));
+    const chavesCrescimento = new Set([...recCategoria.rows.map((x) => x.chave), ...recCategoriaAnterior.rows.map((x) => x.chave)]);
+    const crescimento = [...chavesCrescimento].map((chave) => {
+      const agora = recCategoria.rows.find((x) => x.chave === chave)?.valor || 0;
+      const antes = antesPorCat.get(chave) || 0;
+      return {
+        chave, agora, antes,
+        diferenca: round2(agora - antes),
+        variacao: antes > 0 ? ((agora - antes) / antes) * 100 : null,
+        novo: antes === 0 && agora > 0,
+        sumiu: agora === 0 && antes > 0,
+      };
+    }).sort((a, b) => b.diferenca - a.diferenca);
+
     // Contratos recorrentes. MRR = quanto entra por mês se nada mudar; semanal e
     // anual são normalizados pra mês para poderem somar na mesma linha (hoje a
     // base só tem mensal, mas o cálculo não depende disso).
@@ -4770,6 +4878,7 @@ function RelatoriosPage({ data, subTab, setSubTab, onConfirmarRecebimento, onEdi
       r, incluiFuturo, meses, totalReceita, totalDespesa,
       nomeCategoria, nomeFornecedor,
       despCategoria, despFornecedor, despTipoCusto, recCategoria, recCliente,
+      anterior, crescimento,
       mrr, ativos: ativos.length, totalRecorrentes: recorrentes.length,
       novosNoPeriodo, canceladosNoPeriodo, baseInicio, taxaCancelamento, contratosPorMes,
     };
@@ -4904,6 +5013,36 @@ function RelatoriosPage({ data, subTab, setSubTab, onConfirmarRecebimento, onEdi
             {verTudoCliente ? 'Mostrar só os 30 maiores' : `Mostrar todos os ${cli.rows.length} clientes`}
           </Button>
         )}
+
+        <RelatorioTabela
+          titulo="Produtos em crescimento e em queda"
+          desc={`Compara o período escolhido com o período anterior de igual tamanho (${formatDateBR(toISODate(calc.anterior.start))} a ${formatDateBR(toISODate(calc.anterior.end))}). A ordem é pela diferença em reais, não pelo percentual: um produto que sai de R$ 10 para R$ 30 cresce 200% e não muda o caixa. É cálculo de tendência sobre o que já foi faturado — não é previsão de modelo estatístico nem de inteligência artificial.`}
+          colunas={[{ label: 'Produto / categoria' }, { label: 'Período anterior', align: 'right' }, { label: 'Período atual', align: 'right' }, { label: 'Diferença', align: 'right' }, { label: 'Variação', align: 'right' }]}
+          linhas={calc.crescimento.map((c) => ({
+            chave: c.chave,
+            celulas: [
+              <>
+                {calc.nomeCategoria(c.chave)}
+                {c.novo && <span style={{ marginLeft: 6, fontSize: 'var(--fs-micro)', fontWeight: 700, color: 'var(--success)', background: 'var(--positive-soft)', borderRadius: 999, padding: '2px 7px' }}>novo</span>}
+                {c.sumiu && <span style={{ marginLeft: 6, fontSize: 'var(--fs-micro)', fontWeight: 700, color: 'var(--negative)', background: 'var(--negative-soft)', borderRadius: 999, padding: '2px 7px' }}>parou</span>}
+              </>,
+              formatCurrency(c.antes),
+              formatCurrency(c.agora),
+              (c.diferenca > 0 ? '+' : '') + formatCurrency(c.diferenca),
+              c.variacao == null ? (c.novo ? 'novo' : '—') : `${c.variacao > 0 ? '+' : ''}${pct(c.variacao)}`,
+            ],
+            tom: c.diferenca < 0 ? 'var(--negative)' : undefined,
+          }))}
+          vazioTexto="Sem receita nos dois períodos para comparar."
+          onBaixar={() => baixarCSV(`produtos-crescimento_${sufixo}.csv`, calc.crescimento.map((c) => ({
+            Produto: calc.nomeCategoria(c.chave),
+            'Período anterior': numeroCSV(c.antes),
+            'Período atual': numeroCSV(c.agora),
+            'Diferença': numeroCSV(c.diferenca),
+            'Variação %': c.variacao == null ? '' : numeroCSV(c.variacao),
+            'Situação': c.novo ? 'novo' : c.sumiu ? 'parou' : c.diferenca > 0 ? 'crescendo' : c.diferenca < 0 ? 'caindo' : 'estável',
+          })))}
+        />
       </>
     );
   }
@@ -5063,8 +5202,10 @@ const AJUDA_SECOES = [
       ['Resultado mês a mês', 'Quanto entrou, quanto saiu, quanto sobrou e a margem de cada mês. A margem é quanto sobrou de cada R$ 100 que entraram. Contrato recorrente entra uma vez por mês ativo, e é por isso que a soma aqui é maior que a soma dos valores de contrato.'],
       ['Despesas', 'Três olhares sobre o mesmo gasto: por categoria (para onde foi), por fornecedor (quem recebeu) e custo fixo x variável (o que se repete todo mês contra o que dá pra apertar).'],
       ['Receita', 'Por produto (o que mais vende) e por cliente (quem mais fatura). "Cobranças" é quantas vezes aquilo foi faturado no período; "contratos" é quantas vendas diferentes.'],
+      ['Produtos em crescimento', 'Compara cada produto com o período anterior de igual tamanho e ordena pela diferença em reais — quem puxou o faturamento pra cima e quem puxou pra baixo. Produto que não existia antes aparece como "novo"; produto que faturava e parou aparece como "parou". É conta de tendência sobre o que já foi faturado, não adivinhação.'],
       ['Contratos recorrentes', 'Sua receita que se repete: quanto entra por mês hoje, quantos contratos entraram e saíram no período, a taxa de cancelamento e a lista de quem cancelou — com quanto cada um valia por mês.'],
       ['Vencimentos', 'Cada contrato recorrente vence todo mês no mesmo dia da data original dele. Sem confirmação de recebimento depois desse dia, o atraso começa a contar. Até 10 dias é Atenção (amarelo); acima disso é Crítico (vermelho). O botão de check marca o mês como recebido — o sistema não conversa com o banco, essa confirmação é sua.'],
+      ['Contrato parado', 'Contrato ativo que não recebe há 3 meses ou mais aparece em vermelho no topo da tela de Vencimentos, com a data do último pagamento e há quantos meses parou. É o aviso mais importante ali: esse valor está contando como receita recorrente ativa e não está entrando. Ou é cobrança a fazer, ou o contrato já morreu e precisa ser cancelado.'],
       ['Baixar CSV', 'Cada tabela tem um botão que baixa aquele relatório num arquivo que abre direto no Excel, com os acentos e os centavos certos. Quando a tela mostra só os 30 maiores, o arquivo traz todos.'],
     ],
   },
