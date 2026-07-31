@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Home, Receipt, TrendingUp, Tag, Settings, Bell, LogOut, ChevronDown, Users, BarChart3, HelpCircle } from 'lucide-react';
+import { Home, Receipt, TrendingUp, Settings, Bell, LogOut, ChevronDown, Users, BarChart3, HelpCircle, ArrowUpCircle, ArrowDownCircle } from 'lucide-react';
 import { LogoHorizontal } from '../brand/Logo.jsx';
 
 /* =========================================================================
@@ -16,24 +16,35 @@ import { LogoHorizontal } from '../brand/Logo.jsx';
 
 // Só entram itens que levam a uma página real — nada de item decorativo.
 export function navItemsFor(role) {
-  const base = [
+  // Vendedor só lança venda, então pra ele a seção é uma só e se chama "Vendas".
+  if (role === 'vendedor') {
+    return [
+      { key: 'inicio', label: 'Visão geral', icon: Home },
+      { key: 'receitas', label: 'Vendas', icon: Receipt },
+      { key: 'previsao', label: 'Previsão', icon: TrendingUp },
+      { key: 'clientes', label: 'Clientes', icon: Users },
+      { key: 'config', label: 'Configurações', icon: Settings },
+    ];
+  }
+  // "Receitas" e "Despesas" em vez de um "Lançamentos" com filtro de tipo: são
+  // as duas perguntas que se faz na prática ("quanto entrou", "quanto saiu") e
+  // são as palavras que o resto do app já usa — categoria é do tipo receita ou
+  // despesa, o formulário diz Receita/Despesa. "Entradas/Saídas" seria um
+  // segundo vocabulário pra mesma coisa, e impreciso: a lista mostra o
+  // lançamento mesmo antes de o dinheiro entrar ou sair.
+  //
+  // São 7 seções, o teto desta barra (no celular são 7 ícones dividindo ~317px).
+  // Por isso Vencimentos é aba de Relatórios e os cadastros são abas de
+  // Clientes — os dois cabem em submenu sem custo de largura.
+  return [
     { key: 'inicio', label: 'Visão geral', icon: Home },
-    { key: 'lancamentos', label: role === 'vendedor' ? 'Vendas' : 'Lançamentos', icon: Receipt },
+    { key: 'receitas', label: 'Receitas', icon: ArrowUpCircle },
+    { key: 'despesas', label: 'Despesas', icon: ArrowDownCircle },
     { key: 'previsao', label: 'Previsão', icon: TrendingUp },
     { key: 'clientes', label: 'Clientes', icon: Users },
+    { key: 'relatorios', label: 'Relatórios', icon: BarChart3 },
+    { key: 'config', label: 'Configurações', icon: Settings },
   ];
-  if (role !== 'vendedor') {
-    // Vencimentos virou uma aba de Relatórios: é relatório do mesmo jeito que
-    // os outros, e manter as duas coisas separadas colocaria 8 seções numa
-    // barra que comporta 7 (no celular são 7 ícones dividindo ~317px).
-    base.push({ key: 'relatorios', label: 'Relatórios', icon: BarChart3 });
-    // "Cadastros" e não "Categorias": a página abriga 6 cadastros diferentes
-    // (categorias, fornecedores, planos, serviços, ramos, índices), e o nome
-    // antigo descrevia só o primeiro deles.
-    base.push({ key: 'categorias', label: 'Cadastros', icon: Tag });
-  }
-  base.push({ key: 'config', label: 'Configurações', icon: Settings });
-  return base;
 }
 
 const navBtnStyle = (active) => ({

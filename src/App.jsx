@@ -1142,7 +1142,7 @@ function ConfirmDialog({ message, onCancel, onConfirm }) {
    LISTAS: LANÇAMENTO E CATEGORIA
    ========================================================================= */
 
-function TransactionRow({ tx, category, last, onClick }) {
+function TransactionRow({ tx, category, last, onClick, faltas }) {
   const Icon = ICON_MAP[category?.icone] || MoreHorizontal;
   const status = getRecurrenceStatus(tx);
   const color = category?.cor || '#7A6A58';
@@ -1169,6 +1169,13 @@ function TransactionRow({ tx, category, last, onClick }) {
           {tx.status === 'pendente' && <span style={{ color: 'var(--warning-strong)', fontWeight: 700 }}>· Aguardando aprovação</span>}
           {tx.status === 'rejeitado' && <span style={{ color: 'var(--negative)', fontWeight: 700 }}>· Rejeitada</span>}
         </div>
+        {/* O que falta neste lançamento, direto na linha — mesma ideia da lista
+            de Clientes: ver o buraco sem precisar abrir o formulário. */}
+        {faltas && faltas.length > 0 && (
+          <div style={{ fontSize: 'var(--fs-small)', color: 'var(--warning-strong)', marginTop: 2, fontWeight: 600 }}>
+            Falta: {faltas.map((f) => f.label).join(', ')}
+          </div>
+        )}
       </div>
       <div style={{ fontWeight: 700, fontSize: 14, color: tx.tipo === 'receita' ? 'var(--positive)' : 'var(--negative)', whiteSpace: 'nowrap' }}>
         {tx.tipo === 'receita' ? '+ ' : '- '}{formatCurrency(tx.valor)}
@@ -1682,7 +1689,7 @@ function MuralAdminModal({ orientacoes, persistOrientacoes, askConfirm }) {
    FORMULÁRIO DE LANÇAMENTO + FLUXO DE RECORRÊNCIA
    ========================================================================= */
 
-function TransactionForm({ draft, categories, role, vendedores, planos, fornecedores, onSubmit, onCancel, onDelete, onCancelRecurrence, onApprove, onReject }) {
+function TransactionForm({ draft, categories, role, vendedores, planos, fornecedores, transactions, onSubmit, onCancel, onDelete, onCancelRecurrence, onApprove, onReject }) {
   const [local, setLocal] = useState(draft);
   const [error, setError] = useState('');
   const cats = categories.filter((c) => c.tipo === local.tipo);
@@ -1691,6 +1698,26 @@ function TransactionForm({ draft, categories, role, vendedores, planos, forneced
   const emRevisao = role === 'admin' && local.status === 'pendente';
   const planosAtivos = (planos || []).filter((p) => p.ativo !== false);
   const planoEscolhido = local.planoId ? planosAtivos.find((p) => p.id === local.planoId) : null;
+
+  // Em despesa, o histórico do fornecedor vira sugestão de categoria e de custo
+  // fixo/variável, e os avisos de boa prática aparecem antes de salvar.
+  const historicoForn = useMemo(
+    () => (isVenda ? null : historicoDoFornecedor(transactions || [], local.clienteNome)),
+    [transactions, local.clienteNome, isVenda],
+  );
+  const categoriaSugerida = historicoForn?.categoriaId ? categories.find((c) => c.id === historicoForn.categoriaId) : null;
+  const sugestaoAplicavel = !!categoriaSugerida
+    && (local.categoriaId !== categoriaSugerida.id
+      || (historicoForn.fixaSugerida != null && local.despesaFixa !== historicoForn.fixaSugerida));
+  const avisos = isVenda ? [] : avisosDaDespesa(local, categories.find((c) => c.id === local.categoriaId), historicoForn);
+
+  function aplicarSugestao() {
+    setLocal((l) => ({
+      ...l,
+      categoriaId: categoriaSugerida.id,
+      despesaFixa: historicoForn.fixaSugerida != null ? historicoForn.fixaSugerida : l.despesaFixa,
+    }));
+  }
 
   // Ao escolher um plano negociado, os campos vêm preenchidos com o que o admin
   // cadastrou (preço, categoria, duração). O admin ainda pode ajustar tudo antes
@@ -1790,6 +1817,25 @@ function TransactionForm({ draft, categories, role, vendedores, planos, forneced
             {(fornecedores || []).filter((f) => f.ativo !== false).map((f) => <option key={f.id} value={f.nome} />)}
           </datalist>
         </Field>
+      )}
+
+      {/* O que o histórico deste fornecedor diz. Sugestão, nunca preenchimento
+          automático silencioso: quem lança precisa ver o que está aceitando. */}
+      {!isVenda && historicoForn && (
+        <div style={{ background: 'var(--surface-2)', borderRadius: 12, padding: 12, marginBottom: 14, marginTop: -4 }}>
+          <div style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', lineHeight: 1.6 }}>
+            Você já lançou <strong style={{ color: 'var(--ink)' }}>{historicoForn.lancamentos}x</strong> para este fornecedor
+            {historicoForn.ultimo ? `, a última em ${formatDateBR(historicoForn.ultimo)}` : ''}.
+            {categoriaSugerida && <> Costuma entrar em <strong style={{ color: 'var(--ink)' }}>{categoriaSugerida.nome}</strong>
+              {historicoForn.fixaSugerida != null && <> como custo <strong style={{ color: 'var(--ink)' }}>{historicoForn.fixaSugerida ? 'fixo' : 'variável'}</strong></>}
+              , com valor por volta de <strong style={{ color: 'var(--ink)' }}>{formatCurrency(historicoForn.valorTipico)}</strong>.</>}
+          </div>
+          {sugestaoAplicavel && (
+            <Button variant="secondary" onClick={aplicarSugestao} style={{ marginTop: 10 }}>
+              <Check size={14} /> Usar {categoriaSugerida.nome}{historicoForn.fixaSugerida != null ? ` e custo ${historicoForn.fixaSugerida ? 'fixo' : 'variável'}` : ''}
+            </Button>
+          )}
+        </div>
       )}
 
       {/* Custo fixo x variável: as 3.420 despesas importadas já vinham
@@ -1912,6 +1958,26 @@ function TransactionForm({ draft, categories, role, vendedores, planos, forneced
       )}
 
       {error && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', marginTop: 12, fontWeight: 600 }}>{error}</div>}
+
+      {/* Orientação de lançamento: nada aqui bloqueia o salvamento — quem
+          conhece o próprio negócio decide. Mas o erro é apontado antes de
+          virar número errado no relatório, com o motivo explicado. */}
+      {avisos.length > 0 && (
+        <div style={{ marginTop: 6, marginBottom: 4, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {avisos.map((a, i) => {
+            const cor = a.tom === 'danger' ? 'var(--negative)' : a.tom === 'warning' ? 'var(--warning-strong)' : 'var(--primary-text)';
+            const fundo = a.tom === 'danger' ? 'var(--negative-soft)' : a.tom === 'warning' ? 'var(--warning-light)' : 'var(--brand-soft)';
+            return (
+              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', background: fundo, borderRadius: 10, padding: '10px 12px' }}>
+                <span aria-hidden="true" style={{ flexShrink: 0, marginTop: 1 }}>
+                  {a.tom === 'info' ? <Sparkles size={15} color={cor} /> : <Clock size={15} color={cor} />}
+                </span>
+                <span style={{ fontSize: 'var(--fs-small)', color: cor, lineHeight: 1.55, fontWeight: a.tom === 'info' ? 600 : 700 }}>{a.texto}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {emRevisao ? (
         <>
@@ -2235,8 +2301,10 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
   const [focusMetric, setFocusMetric] = useState(null);
   const [resumoMode, setResumoMode] = useState('total');
   const [rankingCompleto, setRankingCompleto] = useState(false);
+  const [listaFocoLimite, setListaFocoLimite] = useState(40);
   function toggleFocus(key) {
     setFocusMetric((cur) => (cur === key ? null : key));
+    setListaFocoLimite(40);
   }
 
   // Escolher um ano é pedir os 12 meses: a tabela mês a mês abre junto, sem
@@ -2266,16 +2334,34 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
   const periodoMultiMes = mesesPeriodo.length > 1;
   const incluiFuturo = range.end > endOfMonth(new Date());
 
-  // A janela do gráfico sai do próprio período, não de uma tabela fixa: back e
+  // A janela do gráfico sai do próprio período escolhido, sempre — back e
   // forward são distâncias em meses até o mês atual e podem ser negativas
-  // quando o período todo está no passado — o laço dos build* aceita isso.
-  // Período de um único mês mantém 6 meses de histórico, senão o gráfico
-  // viraria um ponto só, sem tendência nenhuma.
-  const chartWindow = periodoMultiMes
-    ? { back: 1 - monthsDiff(new Date(), range.start), forward: monthsDiff(new Date(), range.end) }
-    : { back: 6, forward: 0 };
+  // quando o período todo está no passado. Um período de um único mês vira um
+  // gráfico de um ponto só: antes o gráfico teimava em mostrar 6 meses fixos
+  // mesmo com "Este mês" selecionado, o que contradizia o período escolhido no
+  // seletor logo acima — o número da tela e o gráfico da tela precisam bater.
+  const chartWindow = { back: 1 - monthsDiff(new Date(), range.start), forward: monthsDiff(new Date(), range.end) };
   const cashFlowRows = buildCashFlowRows(txs, chartWindow.back, chartWindow.forward);
   const resultadoRows = buildCompanyEvolution(txs, chartWindow.back, chartWindow.forward);
+
+  // Lista de lançamentos por trás do número do cartão clicado — só os que têm
+  // ocorrência dentro do período escolhido, sem misturar com período anterior
+  // nem com projeção fora do intervalo. Contrato recorrente entra uma vez, com
+  // o valor já multiplicado pelas cobranças que caem no período (mesma conta
+  // que soma o cartão), e a etiqueta "×N" avisa quando não é uma cobrança só.
+  const linhasFocoPeriodo = useMemo(() => {
+    if (focusMetric !== 'receitas' && focusMetric !== 'despesas') return [];
+    const tipoFoco = focusMetric === 'receitas' ? 'receita' : 'despesa';
+    return txs
+      .filter((t) => t.tipo === tipoFoco)
+      .map((t) => {
+        const ocorrencias = expandOccurrences(t, range.start, range.end).length;
+        return ocorrencias > 0 ? { tx: t, ocorrencias, valorNoPeriodo: round2(t.valor * ocorrencias) } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => (b.tx.data || '').localeCompare(a.tx.data || ''));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [txs, focusMetric, range.start, range.end]);
 
   // Ranking de produtos/serviços do período (por categoria de receita), do mais
   // vendido ao menos vendido. Ordena por valor faturado, não por quantidade.
@@ -2337,88 +2423,61 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
     ? buildVendedorRanking(rankingPublico.transacoes, rankingPublico.vendedores, range.start, range.end, data.planos)
     : [];
 
+  // "Precisa da sua atenção" virou um aviso compacto, não a primeira coisa da
+  // tela: na hierarquia de uma leitura financeira, o resultado do período vem
+  // antes de qualquer pendência operacional (é assim que se lê um DRE — o
+  // número primeiro, os avisos depois). O bloco também ficou mais discreto —
+  // uma linha por pendência num único cartão, em vez de vários cartões grandes
+  // e coloridos competindo com os números principais.
+  const blocoAtencao = temAtencao && (
+    <Card style={{ borderColor: 'var(--warning)', marginBottom: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-small)', fontWeight: 700, color: 'var(--warning-strong)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 10 }}>
+        <Clock size={14} /> Pendências
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {aguardandoRevisao.slice(0, 5).map((t) => {
+          const vend = data.vendedores.find((v) => v.id === t.vendedorId);
+          return (
+            <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-small)', color: 'var(--ink)', gap: 8 }}>
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                Venda aguardando revisão · {vend?.nome || 'Vendedor'} · {t.clienteNome || 'sem cliente'} · {formatCurrency(t.valor)}
+              </span>
+              <button onClick={() => onReviewSale(t)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 'var(--fs-small)', cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
+                Revisar
+              </button>
+            </div>
+          );
+        })}
+        {pendentes.slice(0, 4).map((t) => {
+          const c = data.categories.find((cc) => cc.id === t.categoriaId);
+          return (
+            <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-small)', color: 'var(--ink)', gap: 8 }}>
+              <span>Aguardando ativação · {c?.nome} · {formatCurrency(t.valor)} · ativa em {daysUntil(t.dataAtivacao)} dia(s)</span>
+              {/* Só admin ativa antes do prazo — muitos produtos têm período de
+                  teste e o vendedor não deve poder pular essa validação. */}
+              {role === 'admin' && (
+                <button onClick={() => onActivateNow(t)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 'var(--fs-small)', cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
+                  Ativar agora
+                </button>
+              )}
+            </div>
+          );
+        })}
+        {somaPagarHoje > 0 && (
+          <div style={{ fontSize: 'var(--fs-small)', color: 'var(--ink)' }}>Vence hoje (a pagar) · {formatCurrency(somaPagarHoje)} · {pagarHoje.length} conta(s)</div>
+        )}
+        {somaPagarAtraso > 0 && (
+          <div style={{ fontSize: 'var(--fs-small)', color: 'var(--negative)', fontWeight: 700 }}>Em atraso — a pagar · {formatCurrency(somaPagarAtraso)} · {pagarAtraso.length} conta(s)</div>
+        )}
+        {somaReceberAtraso > 0 && (
+          <div style={{ fontSize: 'var(--fs-small)', color: 'var(--negative)', fontWeight: 700 }}>Em atraso — a receber · {formatCurrency(somaReceberAtraso)} · {receberAtraso.length} conta(s)</div>
+        )}
+      </div>
+    </Card>
+  );
+
   return (
     <div style={{ paddingTop: 12 }}>
-      {temAtencao && (
-        <div style={{ marginBottom: 20 }}>
-          <SectionTitle icon={Clock}>Precisa da sua atenção</SectionTitle>
-
-          {aguardandoRevisao.length > 0 && (
-            <Card style={{ marginBottom: 10, borderColor: 'var(--warning)', background: 'var(--warning-light)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, color: 'var(--warning-strong)' }}>
-                <Clock size={16} /> {aguardandoRevisao.length} venda(s) aguardando sua revisão
-              </div>
-              <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {aguardandoRevisao.slice(0, 5).map((t) => {
-                  const vend = data.vendedores.find((v) => v.id === t.vendedorId);
-                  return (
-                    <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-body)', color: 'var(--warning-strong)', gap: 8 }}>
-                      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {vend?.nome || 'Vendedor'} · {t.clienteNome || 'sem cliente'} · {formatCurrency(t.valor)}
-                      </span>
-                      <button onClick={() => onReviewSale(t)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 'var(--fs-small)', cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
-                        Revisar
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            </Card>
-          )}
-
-          {pendentes.length > 0 && (
-            <Card style={{ marginBottom: 10, borderColor: 'var(--warning)', background: 'var(--warning-light)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, color: 'var(--warning-strong)' }}>
-                <Clock size={16} /> {pendentes.length} lançamento(s) aguardando ativação
-              </div>
-              <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {pendentes.slice(0, 4).map((t) => {
-                  const c = data.categories.find((cc) => cc.id === t.categoriaId);
-                  return (
-                    <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-body)', color: 'var(--warning-strong)', gap: 8 }}>
-                      <span>{c?.nome} · {formatCurrency(t.valor)} · ativa em {daysUntil(t.dataAtivacao)} dia(s)</span>
-                      {/* Só admin ativa antes do prazo — muitos produtos têm período de
-                          teste e o vendedor não deve poder pular essa validação. */}
-                      {role === 'admin' && (
-                        <button onClick={() => onActivateNow(t)} style={{ background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 'var(--fs-small)', cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
-                          Ativar agora
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </Card>
-          )}
-
-          {temContasEmAlerta && (
-            <div className="lomuz-kpi-grid">
-              <StatCard
-                title="Vence hoje (a pagar)"
-                value={formatCurrency(somaPagarHoje)}
-                icon={Clock}
-                tone={somaPagarHoje > 0 ? 'warning' : 'neutral'}
-                footer={`${pagarHoje.length} conta(s)`}
-              />
-              <StatCard
-                title="Em atraso — a pagar"
-                value={formatCurrency(somaPagarAtraso)}
-                icon={ArrowDownCircle}
-                tone={somaPagarAtraso > 0 ? 'danger' : 'neutral'}
-                footer={`${pagarAtraso.length} conta(s)`}
-              />
-              <StatCard
-                title="Em atraso — a receber"
-                value={formatCurrency(somaReceberAtraso)}
-                icon={ArrowUpCircle}
-                tone={somaReceberAtraso > 0 ? 'danger' : 'neutral'}
-                footer={`${receberAtraso.length} conta(s)`}
-              />
-            </div>
-          )}
-        </div>
-      )}
-
       <SectionTitle icon={TrendingUp}>Resumo do período</SectionTitle>
       <PeriodSelector value={period} onChange={setPeriod} />
 
@@ -2431,7 +2490,7 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
           trendPct={varReceitas}
           trendLabel="vs período anterior"
           goodWhenUp
-          hint="Soma das receitas aprovadas dentro do período escolhido, incluindo as ocorrências de lançamentos recorrentes. Toque para ver a evolução mês a mês."
+          hint="Soma das receitas aprovadas dentro do período escolhido, incluindo as ocorrências de lançamentos recorrentes. Toque para ver a lista de lançamentos."
           onClick={() => toggleFocus('receitas')}
           active={focusMetric === 'receitas'}
         />
@@ -2443,7 +2502,7 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
           trendPct={varDespesas}
           trendLabel="vs período anterior"
           goodWhenUp={false}
-          hint="Soma das despesas aprovadas dentro do período escolhido, incluindo as ocorrências de lançamentos recorrentes. Toque para ver a evolução mês a mês."
+          hint="Soma das despesas aprovadas dentro do período escolhido, incluindo as ocorrências de lançamentos recorrentes. Toque para ver a lista de lançamentos."
           onClick={() => toggleFocus('despesas')}
           active={focusMetric === 'despesas'}
         />
@@ -2526,6 +2585,75 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
         </>
       )}
 
+      {/* Lista por trás do cartão clicado: abre ao tocar em Receitas ou
+          Despesas, some ao tocar de novo — "recolhível" pede um controle
+          explícito de abrir/fechar, não só cor de destaque no cartão. Só os
+          lançamentos com ocorrência no período escolhido, nada de período
+          anterior nem projeção fora do intervalo. */}
+      {(focusMetric === 'receitas' || focusMetric === 'despesas') && (
+        <Card style={{ padding: 0, marginTop: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>
+              {linhasFocoPeriodo.length} lançamento(s) de {focusMetric === 'receitas' ? 'receita' : 'despesa'} · {periodLabel(period)}
+            </div>
+            <button
+              onClick={() => toggleFocus(focusMetric)}
+              aria-expanded="true"
+              style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'none', border: 'none', color: 'var(--primary-text)', fontWeight: 700, fontSize: 'var(--fs-small)', cursor: 'pointer', flexShrink: 0 }}
+            >
+              Recolher <ChevronRight size={14} style={{ transform: 'rotate(-90deg)' }} />
+            </button>
+          </div>
+
+          {linhasFocoPeriodo.length === 0 ? (
+            <div style={{ padding: 16, fontSize: 'var(--fs-body)', color: 'var(--ink-soft)' }}>Nada neste período.</div>
+          ) : (
+            <>
+              {linhasFocoPeriodo.slice(0, listaFocoLimite).map(({ tx, ocorrencias, valorNoPeriodo }, i, arr) => {
+                const cat = data.categories.find((c) => c.id === tx.categoriaId);
+                return (
+                  <div
+                    key={tx.id}
+                    onClick={() => onReviewSale(tx)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', borderBottom: i === arr.length - 1 && arr.length <= listaFocoLimite ? 'none' : '1px solid var(--border)', cursor: 'pointer' }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {tx.clienteNome || tx.descricao || cat?.nome || 'Sem descrição'}
+                      </div>
+                      <div style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                        {tx.recorrente ? (
+                          // Contrato recorrente mostra a data de início, não a
+                          // da cobrança do período — sem o rótulo, "10/01/2026"
+                          // ao lado de uma cobrança de julho pareceria erro.
+                          <><Repeat size={11} /> Contrato desde {formatDateBR(tx.data)}</>
+                        ) : formatDateBR(tx.data)}
+                        {cat ? ` · ${cat.nome}` : ''}{ocorrencias > 1 ? ` · ${ocorrencias}x no período` : ''}
+                      </div>
+                    </div>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: focusMetric === 'receitas' ? 'var(--positive)' : 'var(--negative)', whiteSpace: 'nowrap' }}>
+                      {formatCurrency(valorNoPeriodo)}
+                    </div>
+                  </div>
+                );
+              })}
+              {linhasFocoPeriodo.length > listaFocoLimite && (
+                <button
+                  onClick={() => setListaFocoLimite((n) => n + 40)}
+                  style={{ width: '100%', padding: 12, background: 'none', border: 'none', borderTop: '1px solid var(--border)', color: 'var(--primary-text)', fontWeight: 700, fontSize: 'var(--fs-small)', cursor: 'pointer' }}
+                >
+                  Mostrar mais {Math.min(40, linhasFocoPeriodo.length - listaFocoLimite)} de {linhasFocoPeriodo.length - listaFocoLimite} restantes
+                </button>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', borderTop: '1px solid var(--border)', background: 'var(--surface-2)', fontWeight: 700, fontSize: 14 }}>
+                <span>Total do período</span>
+                <span>{formatCurrency(focusMetric === 'receitas' ? receitas.total : despesas.total)}</span>
+              </div>
+            </>
+          )}
+        </Card>
+      )}
+
       <SectionTitle icon={Receipt}>Detalhes e movimentação</SectionTitle>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <CashFlowChart
@@ -2535,8 +2663,10 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
           title={`${focusMetric === 'resultado' ? 'Evolução do resultado mensal'
             : focusMetric === 'receitas' ? 'Fluxo de caixa — receitas em destaque'
               : focusMetric === 'despesas' ? 'Fluxo de caixa — despesas em destaque'
-                : 'Fluxo de caixa'} · ${periodoMultiMes ? periodLabel(period) : 'últimos 6 meses'}`}
+                : 'Fluxo de caixa'} · ${periodLabel(period)}`}
         />
+
+        {blocoAtencao}
 
         <Panel
           title={`Ranking de produtos — ${periodLabel(period)}`}
@@ -2749,61 +2879,188 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
 }
 
 /* =========================================================================
-   PÁGINA: LANÇAMENTOS
+   PÁGINAS: RECEITAS E DESPESAS
+
+   Uma página só, parametrizada pelo tipo. Antes era um "Lançamentos" com filtro
+   de tipo no topo — mas quem abre a tela já sabe se quer ver o que entrou ou o
+   que saiu, e cada lado pede filtros diferentes: receita tem contrato e
+   vendedor, despesa tem fornecedor, conta em aberto e custo fixo.
    ========================================================================= */
 
-function LancamentosPage({ data, role, currentVendedorId, onEdit, onImportClick }) {
-  const [filterTipo, setFilterTipo] = useState('todos');
-  const [filterCat, setFilterCat] = useState('todas');
-  const [filterPeriodo, setFilterPeriodo] = useState('todos');
-  const [filterRecorrente, setFilterRecorrente] = useState('todos');
+const MOVIMENTOS_POR_PAGINA = 60;
+
+// O que falta num lançamento pra ele funcionar direito. Mesma ideia da lista de
+// clientes: só entra aqui o que de fato desliga alguma função do app, com o
+// motivo escrito — não é cobrança de perfeccionismo.
+const FALTAS_RECEITA = [
+  { key: 'cliente', label: 'cliente', titulo: 'Sem cliente', porque: 'não dá pra saber de quem é a receita nem cruzar com o cadastro', falta: (t) => !(t.clienteNome || '').trim() },
+  { key: 'categoria', label: 'categoria', titulo: 'Sem categoria', porque: 'fica fora do relatório de receita por produto', falta: (t) => !t.categoriaId },
+  { key: 'vendedor', label: 'vendedor', titulo: 'Sem vendedor', porque: 'nenhuma comissão é calculada para a venda', falta: (t) => !t.vendedorId },
+  { key: 'valor', label: 'valor conferido', titulo: 'Valor zerado ou de centavos', porque: 'costuma ser erro de digitação — vale conferir antes que siga cobrando errado', falta: (t) => (t.valor || 0) <= 1 },
+];
+const FALTAS_DESPESA = [
+  { key: 'fornecedor', label: 'fornecedor', titulo: 'Sem fornecedor', porque: 'não entra na conta de quanto você paga para cada um', falta: (t) => !(t.clienteNome || '').trim() },
+  { key: 'categoria', label: 'categoria', titulo: 'Sem categoria', porque: 'não responde "para onde meu dinheiro foi" em nenhum relatório', falta: (t) => !t.categoriaId },
+  { key: 'custo', label: 'custo fixo ou variável', titulo: 'Sem custo fixo ou variável', porque: 'o relatório de custo fixo x variável ignora esses lançamentos', falta: (t) => t.despesaFixa == null },
+  { key: 'vencimento', label: 'vencimento', titulo: 'Em aberto sem data de vencimento', porque: 'não aparece no aviso de contas a pagar nem em Vencimentos', falta: (t) => t.pago === false && !t.dataVencimento },
+  { key: 'valor', label: 'valor conferido', titulo: 'Valor zerado ou de centavos', porque: 'pode ser erro de digitação — resto de arredondamento de comissão também cai aqui e pode ser normal', falta: (t) => (t.valor || 0) <= 1 },
+];
+
+const MOV_PERIODOS = [
+  { key: 'todos', label: 'Todo o período' },
+  { key: 'mes_atual', label: 'Este mês' },
+  { key: 'mes_passado', label: 'Mês passado' },
+  { key: 'ultimos_3', label: 'Últimos 3 meses' },
+  { key: 'ultimos_12', label: 'Últimos 12 meses' },
+  { key: 'ano_atual', label: 'Este ano' },
+  { key: 'ano_passado', label: 'Ano passado' },
+];
+
+const MOV_ORDENS = [
+  { key: 'recente', label: 'Mais recente' },
+  { key: 'antiga', label: 'Mais antiga' },
+  { key: 'maior', label: 'Maior valor' },
+  { key: 'menor', label: 'Menor valor' },
+];
+
+function MovimentosPage({ data, role, currentVendedorId, tipo, onEdit, onImportClick, onNovo }) {
+  const ehReceita = tipo === 'receita';
   const [busca, setBusca] = useState('');
+  const [filterPeriodo, setFilterPeriodo] = useState('todos');
+  const [filterCat, setFilterCat] = useState('todas');
+  const [ordem, setOrdem] = useState('recente');
+  const [limite, setLimite] = useState(MOVIMENTOS_POR_PAGINA);
   const [totalsMode, setTotalsMode] = useState('geral');
+  // Filtros que existem só de um lado.
+  const [filterRecorrencia, setFilterRecorrencia] = useState('todos');
+  const [filterContrato, setFilterContrato] = useState('todos');
+  const [filterStatus, setFilterStatus] = useState('todos');
+  const [filterVendedor, setFilterVendedor] = useState('todos');
+  const [filterPagamento, setFilterPagamento] = useState('todos');
+  const [filterCusto, setFilterCusto] = useState('todos');
+  const [filterFornecedor, setFilterFornecedor] = useState('todos');
+  const [filterFalta, setFilterFalta] = useState('todos');
 
-  let list = scopedTransactions(data, role, currentVendedorId);
-  if (filterTipo !== 'todos') list = list.filter((t) => t.tipo === filterTipo);
-  if (filterCat !== 'todas') list = list.filter((t) => t.categoriaId === filterCat);
-  if (filterRecorrente === 'somente') list = list.filter((t) => t.recorrente);
-  if (filterPeriodo !== 'todos') {
-    const r = getPeriodRange({ type: filterPeriodo });
-    // Vendas antigas com data_estimada (importação sem data real) só aparecem
-    // em "Todo o período" — filtrar por mês/ano específico com uma data que
-    // não é real daria um resultado enganoso.
-    list = list.filter((t) => {
-      if (t.dataEstimada) return false;
-      const d = parseISODate(t.data);
-      return d >= r.start && d <= r.end;
-    });
-  }
+  const categorias = data.categories.filter((c) => c.tipo === tipo);
+  const fornecedores = data.fornecedores || [];
+  const vendedores = data.vendedores || [];
+
+  const todas = scopedTransactions(data, role, currentVendedorId).filter((t) => t.tipo === tipo);
   const termo = busca.trim().toLowerCase();
-  if (termo) {
-    list = list.filter((t) => {
-      const cat = data.categories.find((c) => c.id === t.categoriaId);
-      return (t.descricao || '').toLowerCase().includes(termo)
-        || (t.clienteNome || '').toLowerCase().includes(termo)
-        || (cat?.nome || '').toLowerCase().includes(termo);
-    });
-  }
-  list = [...list].sort((a, b) => new Date(b.data) - new Date(a.data));
 
-  // Totais do filtro atual — sempre visíveis ao final da lista, no modo
-  // "geral" (soma tudo) ou "mensal" (agrupado por mês).
-  const totalReceitas = round2(list.filter((t) => t.tipo === 'receita').reduce((s, t) => s + t.valor, 0));
-  const totalDespesas = round2(list.filter((t) => t.tipo === 'despesa').reduce((s, t) => s + t.valor, 0));
-  const totalGeral = round2(totalReceitas - totalDespesas);
+  const FALTAS = ehReceita ? FALTAS_RECEITA : FALTAS_DESPESA;
+  const faltasPorLancamento = useMemo(() => {
+    const m = new Map();
+    todas.forEach((t) => { const f = FALTAS.filter((x) => x.falta(t)); if (f.length) m.set(t.id, f); });
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todas, ehReceita]);
+  const resumoFaltas = FALTAS.map((f) => ({ ...f, quantos: todas.filter((t) => f.falta(t)).length })).filter((f) => f.quantos > 0);
+  const totalIncompletos = faltasPorLancamento.size;
+
+  let list = todas.filter((t) => {
+    if (filterCat !== 'todas' && t.categoriaId !== filterCat) return false;
+    if (filterPeriodo !== 'todos') {
+      // Vendas antigas com data estimada (importação sem data real) só aparecem
+      // em "Todo o período": filtrar por um mês com uma data que não é real
+      // daria um resultado enganoso.
+      if (t.dataEstimada) return false;
+      const r = getPeriodRange({ type: filterPeriodo });
+      const d = parseISODate(t.data);
+      if (d < r.start || d > r.end) return false;
+    }
+    if (ehReceita) {
+      if (filterRecorrencia === 'recorrentes' && !t.recorrente) return false;
+      if (filterRecorrencia === 'unicas' && t.recorrente) return false;
+      if (filterContrato !== 'todos') {
+        if (!t.recorrente) return false;
+        if (getRecurrenceStatus(t) !== filterContrato) return false;
+      }
+      if (filterStatus !== 'todos' && (t.status || 'aprovado') !== filterStatus) return false;
+      if (filterVendedor === 'sem' && t.vendedorId) return false;
+      if (filterVendedor !== 'todos' && filterVendedor !== 'sem' && t.vendedorId !== filterVendedor) return false;
+    } else {
+      if (filterPagamento === 'pagas' && t.pago === false) return false;
+      if (filterPagamento === 'abertas' && t.pago !== false) return false;
+      if (filterCusto === 'fixa' && t.despesaFixa !== true) return false;
+      if (filterCusto === 'variavel' && t.despesaFixa !== false) return false;
+      if (filterCusto === 'nao_classificada' && t.despesaFixa != null) return false;
+      if (filterFornecedor === 'sem' && t.fornecedorId) return false;
+      if (filterFornecedor !== 'todos' && filterFornecedor !== 'sem' && t.fornecedorId !== filterFornecedor) return false;
+    }
+    if (filterFalta === 'incompletos' && !faltasPorLancamento.has(t.id)) return false;
+    if (filterFalta !== 'todos' && filterFalta !== 'incompletos') {
+      const f = FALTAS.find((x) => x.key === filterFalta);
+      if (f && !f.falta(t)) return false;
+    }
+    if (termo) {
+      const cat = data.categories.find((c) => c.id === t.categoriaId);
+      const alvo = `${t.descricao || ''} ${t.clienteNome || ''} ${cat?.nome || ''}`.toLowerCase();
+      if (!alvo.includes(termo)) return false;
+    }
+    return true;
+  });
+
+  list = [...list].sort((a, b) => {
+    if (ordem === 'antiga') return (a.data || '').localeCompare(b.data || '');
+    if (ordem === 'maior') return b.valor - a.valor;
+    if (ordem === 'menor') return a.valor - b.valor;
+    return (b.data || '').localeCompare(a.data || '');
+  });
+  const visiveis = list.slice(0, limite);
+
+  const total = round2(list.reduce((s, t) => s + t.valor, 0));
+  const media = list.length > 0 ? round2(total / list.length) : 0;
+  const emAberto = ehReceita ? 0 : round2(list.filter((t) => t.pago === false).reduce((s, t) => s + t.valor, 0));
+  const filtrando = list.length !== todas.length;
 
   const porMes = {};
   list.forEach((t) => {
     const key = (t.data || '').slice(0, 7);
-    if (!porMes[key]) porMes[key] = { receitas: 0, despesas: 0 };
-    if (t.tipo === 'receita') porMes[key].receitas += t.valor; else porMes[key].despesas += t.valor;
+    if (!porMes[key]) porMes[key] = { valor: 0, qtd: 0 };
+    porMes[key].valor += t.valor;
+    porMes[key].qtd += 1;
   });
   const mensalRows = Object.entries(porMes)
     .sort((a, b) => b[0].localeCompare(a[0]))
-    .map(([key, v]) => ({ key, label: monthLabel(parseISODate(`${key}-01`)), receitas: round2(v.receitas), despesas: round2(v.despesas), saldo: round2(v.receitas - v.despesas) }));
+    .map(([key, v]) => ({ key, label: mesAnoLabel(parseISODate(`${key}-01`)), valor: round2(v.valor), qtd: v.qtd }));
+
+  useEffect(() => { setLimite(MOVIMENTOS_POR_PAGINA); }, [busca, filterPeriodo, filterCat, ordem, filterRecorrencia, filterContrato, filterStatus, filterVendedor, filterPagamento, filterCusto, filterFornecedor, filterFalta]);
+
+  const nomeCategoria = (id) => data.categories.find((c) => c.id === id)?.nome || '';
+  function baixar() {
+    baixarCSV(`${ehReceita ? 'receitas' : 'despesas'}_${toISODate(new Date())}.csv`, list.map((t) => ({
+      Data: formatDateBR(t.data),
+      [ehReceita ? 'Cliente' : 'Fornecedor']: t.clienteNome || '',
+      'Descrição': t.descricao || '',
+      Categoria: nomeCategoria(t.categoriaId),
+      Valor: numeroCSV(t.valor),
+      ...(ehReceita
+        ? {
+          'Cobrança': t.recorrente ? `recorrente (${t.frequencia || 'mensal'})` : 'única',
+          'Contrato': t.recorrente ? { ativo: 'ativo', cancelado: 'cancelado', pendente: 'em teste' }[getRecurrenceStatus(t)] || '' : '',
+          'Cancelado em': t.dataCancelamento ? formatDateBR(t.dataCancelamento) : '',
+          'Aprovação': t.status || 'aprovado',
+          Vendedor: vendedores.find((v) => v.id === t.vendedorId)?.nome || '',
+        }
+        : {
+          Pagamento: t.pago === false ? 'em aberto' : 'pago',
+          Vencimento: t.dataVencimento ? formatDateBR(t.dataVencimento) : '',
+          Custo: t.despesaFixa === true ? 'fixo' : t.despesaFixa === false ? 'variável' : 'não classificado',
+        }),
+    })));
+  }
 
   return (
     <div style={{ paddingTop: 12 }}>
+      <PageToolbar
+        desc={ehReceita
+          ? 'Tudo que entra: vendas e outras receitas. Contrato recorrente aparece uma vez, como contrato — as cobranças mês a mês estão em Relatórios e em Vencimentos.'
+          : 'Tudo que sai, uma linha por parcela. Use "Em aberto" para ver o que ainda falta pagar.'}
+        actionLabel={ehReceita ? (role === 'vendedor' ? 'Nova venda' : 'Nova receita') : 'Nova despesa'}
+        onAction={onNovo}
+      />
+
       {role === 'admin' && (
         <button
           onClick={onImportClick}
@@ -2813,53 +3070,190 @@ function LancamentosPage({ data, role, currentVendedorId, onEdit, onImportClick 
         </button>
       )}
 
-      <SearchInput value={busca} onChange={setBusca} placeholder="Buscar por cliente, descrição ou categoria…" />
+      {/* Mesma função permanente da tela de Clientes: cada linha do aviso diz o
+          que falta e por que importa, e filtra a lista naquele buraco. */}
+      {role === 'admin' && totalIncompletos > 0 && (
+        <Card style={{ marginBottom: 14, borderColor: 'var(--warning)' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800, fontSize: 'var(--fs-title)' }}>
+                <FileText size={17} style={{ color: 'var(--warning-strong)', flexShrink: 0 }} />
+                {totalIncompletos} de {todas.length} lançamento(s) incompleto(s)
+              </div>
+              <div style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', marginTop: 3, lineHeight: 1.5 }}>
+                Clique em um item para ver só os lançamentos que precisam daquele ajuste. Abrir o lançamento já leva ao formulário.
+              </div>
+            </div>
+            {filterFalta !== 'todos' && (
+              <Button variant="secondary" onClick={() => setFilterFalta('todos')} style={{ flexShrink: 0 }}>Limpar filtro</Button>
+            )}
+          </div>
 
-      <FilterGroup label="Tipo">
-        <Chip active={filterTipo === 'todos'} onClick={() => { setFilterTipo('todos'); setFilterCat('todas'); }}>Todos</Chip>
-        <Chip active={filterTipo === 'receita'} onClick={() => { setFilterTipo('receita'); setFilterCat('todas'); }}>Receitas</Chip>
-        <Chip active={filterTipo === 'despesa'} onClick={() => { setFilterTipo('despesa'); setFilterCat('todas'); }}>Despesas</Chip>
-      </FilterGroup>
+          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {resumoFaltas.map((f) => {
+              const ativo = filterFalta === f.key;
+              return (
+                <button
+                  key={f.key}
+                  onClick={() => setFilterFalta(ativo ? 'todos' : f.key)}
+                  aria-pressed={ativo}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+                    padding: '10px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+                    border: ativo ? '1px solid var(--warning)' : '1px solid transparent',
+                    background: ativo ? 'var(--warning-light)' : 'transparent',
+                    color: 'var(--ink)',
+                  }}
+                  onMouseEnter={(e) => { if (!ativo) e.currentTarget.style.background = 'var(--surface-2)'; }}
+                  onMouseLeave={(e) => { if (!ativo) e.currentTarget.style.background = 'transparent'; }}
+                >
+                  <span style={{ minWidth: 54, fontWeight: 800, fontSize: 15, color: 'var(--warning-strong)', flexShrink: 0 }}>{f.quantos}</span>
+                  <span style={{ minWidth: 0, flex: 1 }}>
+                    <span style={{ display: 'block', fontWeight: 700, fontSize: 13 }}>{f.titulo}</span>
+                    <span style={{ display: 'block', fontSize: 12, color: 'var(--ink-soft)', lineHeight: 1.45 }}>{f.porque}</span>
+                  </span>
+                  <ChevronRight size={16} style={{ color: 'var(--ink-soft)', flexShrink: 0 }} />
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      <SearchInput
+        value={busca}
+        onChange={setBusca}
+        placeholder={ehReceita ? 'Buscar por cliente, descrição ou categoria…' : 'Buscar por fornecedor, descrição ou categoria…'}
+      />
 
       <FilterGroup label="Período">
-        <Chip active={filterPeriodo === 'todos'} onClick={() => setFilterPeriodo('todos')}>Todo o período</Chip>
-        <Chip active={filterPeriodo === 'mes_atual'} onClick={() => setFilterPeriodo('mes_atual')}>Este mês</Chip>
-        <Chip active={filterPeriodo === 'ultimos_3'} onClick={() => setFilterPeriodo('ultimos_3')}>Últimos 3 meses</Chip>
-        <Chip active={filterPeriodo === 'ano_atual'} onClick={() => setFilterPeriodo('ano_atual')}>Este ano</Chip>
+        {MOV_PERIODOS.map((p) => (
+          <Chip key={p.key} active={filterPeriodo === p.key} onClick={() => setFilterPeriodo(p.key)}>{p.label}</Chip>
+        ))}
       </FilterGroup>
 
-      <FilterGroup label="Recorrência">
-        <Chip active={filterRecorrente === 'todos'} onClick={() => setFilterRecorrente('todos')}>Todos</Chip>
-        <Chip active={filterRecorrente === 'somente'} onClick={() => setFilterRecorrente('somente')}>Somente recorrentes</Chip>
-      </FilterGroup>
+      {ehReceita ? (
+        <>
+          <FilterGroup label="Forma de cobrança">
+            <Chip active={filterRecorrencia === 'todos'} onClick={() => setFilterRecorrencia('todos')}>Todas</Chip>
+            <Chip active={filterRecorrencia === 'recorrentes'} onClick={() => setFilterRecorrencia('recorrentes')}>Recorrentes</Chip>
+            <Chip active={filterRecorrencia === 'unicas'} onClick={() => setFilterRecorrencia('unicas')}>Venda única</Chip>
+          </FilterGroup>
 
-      <FilterGroup label="Categoria">
-        <select value={filterCat} onChange={(e) => setFilterCat(e.target.value)} style={inputStyle}>
-          <option value="todas">Todas as categorias{filterTipo !== 'todos' ? ` de ${filterTipo === 'receita' ? 'receita' : 'despesa'}` : ''}</option>
-          {filterTipo === 'todos' ? (
-            <>
-              <optgroup label="Receitas">
-                {data.categories.filter((c) => c.tipo === 'receita').map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
-              </optgroup>
-              <optgroup label="Despesas">
-                {data.categories.filter((c) => c.tipo === 'despesa').map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
-              </optgroup>
-            </>
-          ) : (
-            data.categories.filter((c) => c.tipo === filterTipo).map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)
+          <FilterGroup label="Situação do contrato">
+            <Chip active={filterContrato === 'todos'} onClick={() => setFilterContrato('todos')}>Todas</Chip>
+            <Chip active={filterContrato === 'ativo'} onClick={() => setFilterContrato('ativo')}>Ativo</Chip>
+            <Chip active={filterContrato === 'cancelado'} onClick={() => setFilterContrato('cancelado')}>Cancelado</Chip>
+            <Chip active={filterContrato === 'pendente'} onClick={() => setFilterContrato('pendente')}>Em período de teste</Chip>
+          </FilterGroup>
+
+          {role === 'admin' && (
+            <FilterGroup label="Aprovação">
+              <Chip active={filterStatus === 'todos'} onClick={() => setFilterStatus('todos')}>Todas</Chip>
+              <Chip active={filterStatus === 'aprovado'} onClick={() => setFilterStatus('aprovado')}>Aprovadas</Chip>
+              <Chip active={filterStatus === 'pendente'} onClick={() => setFilterStatus('pendente')}>Aguardando</Chip>
+              <Chip active={filterStatus === 'rejeitado'} onClick={() => setFilterStatus('rejeitado')}>Rejeitadas</Chip>
+            </FilterGroup>
           )}
+        </>
+      ) : (
+        <>
+          <FilterGroup label="Pagamento">
+            <Chip active={filterPagamento === 'todos'} onClick={() => setFilterPagamento('todos')}>Todas</Chip>
+            <Chip active={filterPagamento === 'pagas'} onClick={() => setFilterPagamento('pagas')}>Pagas</Chip>
+            <Chip active={filterPagamento === 'abertas'} onClick={() => setFilterPagamento('abertas')}>Em aberto</Chip>
+          </FilterGroup>
+
+          <FilterGroup label="Tipo de custo">
+            <Chip active={filterCusto === 'todos'} onClick={() => setFilterCusto('todos')}>Todos</Chip>
+            <Chip active={filterCusto === 'fixa'} onClick={() => setFilterCusto('fixa')}>Fixo</Chip>
+            <Chip active={filterCusto === 'variavel'} onClick={() => setFilterCusto('variavel')}>Variável</Chip>
+            <Chip active={filterCusto === 'nao_classificada'} onClick={() => setFilterCusto('nao_classificada')}>Não classificado</Chip>
+          </FilterGroup>
+        </>
+      )}
+
+      {role === 'admin' && totalIncompletos > 0 && (
+        <FilterGroup label="Cadastro">
+          <Chip active={filterFalta === 'todos'} onClick={() => setFilterFalta('todos')}>Todos</Chip>
+          <Chip active={filterFalta === 'incompletos'} onClick={() => setFilterFalta('incompletos')}>Incompletos ({totalIncompletos})</Chip>
+          {resumoFaltas.map((f) => (
+            <Chip key={f.key} active={filterFalta === f.key} onClick={() => setFilterFalta(f.key)}>Sem {f.label} ({f.quantos})</Chip>
+          ))}
+        </FilterGroup>
+      )}
+
+      <FilterGroup label={ehReceita ? 'Categoria, vendedor e ordem' : 'Categoria, fornecedor e ordem'}>
+        <select value={filterCat} onChange={(e) => setFilterCat(e.target.value)} style={{ ...inputStyle, flex: '1 1 180px', width: 'auto' }}>
+          <option value="todas">Todas as categorias</option>
+          {categorias.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+        </select>
+
+        {ehReceita ? (
+          role === 'admin' && vendedores.length > 0 && (
+            <select value={filterVendedor} onChange={(e) => setFilterVendedor(e.target.value)} style={{ ...inputStyle, flex: '1 1 170px', width: 'auto' }}>
+              <option value="todos">Todos os vendedores</option>
+              <option value="sem">Sem vendedor (venda da casa)</option>
+              {vendedores.map((v) => <option key={v.id} value={v.id}>{v.nome}</option>)}
+            </select>
+          )
+        ) : (
+          fornecedores.length > 0 && (
+            <select value={filterFornecedor} onChange={(e) => setFilterFornecedor(e.target.value)} style={{ ...inputStyle, flex: '1 1 200px', width: 'auto' }}>
+              <option value="todos">Todos os fornecedores</option>
+              <option value="sem">Sem fornecedor informado</option>
+              {[...fornecedores].sort((a, b) => (a.nome || '').localeCompare(b.nome || '')).map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
+            </select>
+          )
+        )}
+
+        <select value={ordem} onChange={(e) => setOrdem(e.target.value)} style={{ ...inputStyle, flex: '0 1 150px', width: 'auto' }}>
+          {MOV_ORDENS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
         </select>
       </FilterGroup>
 
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, margin: '4px 2px 10px', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)' }}>
+          {filtrando ? `${list.length} de ${todas.length} lançamento(s)` : `${list.length} lançamento(s)`}
+          {list.length > visiveis.length ? ` · mostrando os ${visiveis.length} primeiros` : ''}
+        </span>
+        {list.length > 0 && (
+          <Button variant="secondary" onClick={baixar} style={{ flexShrink: 0 }}>
+            <Download size={15} /> Baixar CSV
+          </Button>
+        )}
+      </div>
+
       {list.length === 0 ? (
-        <EmptyState icon={Receipt} title="Nada por aqui ainda" desc="Toque no botão + para registrar sua primeira receita ou despesa, ou ajuste os filtros acima." />
+        <EmptyState
+          icon={Receipt}
+          title="Nada por aqui"
+          desc={todas.length === 0
+            ? `Nenhuma ${ehReceita ? 'receita' : 'despesa'} lançada ainda. Use o botão acima para registrar a primeira.`
+            : 'Nenhum lançamento com esses filtros. Ajuste a busca ou o período.'}
+          actionLabel={todas.length === 0 ? (ehReceita ? '+ Nova receita' : '+ Nova despesa') : undefined}
+          onAction={todas.length === 0 ? onNovo : undefined}
+        />
       ) : (
         <>
           <Card style={{ padding: 0 }}>
-            {list.map((tx, i) => (
-              <TransactionRow key={tx.id} tx={tx} category={data.categories.find((c) => c.id === tx.categoriaId)} last={i === list.length - 1} onClick={() => onEdit(tx)} />
+            {visiveis.map((tx, i) => (
+              <TransactionRow
+                key={tx.id}
+                tx={tx}
+                category={data.categories.find((c) => c.id === tx.categoriaId)}
+                last={i === visiveis.length - 1}
+                onClick={() => onEdit(tx)}
+                faltas={role === 'admin' ? faltasPorLancamento.get(tx.id) : null}
+              />
             ))}
           </Card>
+
+          {list.length > visiveis.length && (
+            <Button variant="secondary" onClick={() => setLimite((n) => n + MOVIMENTOS_POR_PAGINA)} style={{ width: '100%', marginTop: 12 }}>
+              Mostrar mais {Math.min(MOVIMENTOS_POR_PAGINA, list.length - visiveis.length)} de {list.length - visiveis.length} restantes
+            </Button>
+          )}
 
           <div style={{ marginTop: 14, marginBottom: 24 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
@@ -2874,18 +3268,29 @@ function LancamentosPage({ data, role, currentVendedorId, onEdit, onImportClick 
               <Card>
                 <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
                   <div>
-                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Receitas</div>
-                    <div style={{ fontWeight: 800, fontSize: 18, color: 'var(--positive)' }}>{formatCurrency(totalReceitas)}</div>
+                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{ehReceita ? 'Receitas' : 'Despesas'}</div>
+                    <div style={{ fontWeight: 800, fontSize: 18, color: ehReceita ? 'var(--positive)' : 'var(--negative)' }}>{formatCurrency(total)}</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Despesas</div>
-                    <div style={{ fontWeight: 800, fontSize: 18, color: 'var(--negative)' }}>{formatCurrency(totalDespesas)}</div>
+                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Lançamentos</div>
+                    <div style={{ fontWeight: 800, fontSize: 18 }}>{list.length}</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Resultado</div>
-                    <div style={{ fontWeight: 800, fontSize: 18, color: totalGeral >= 0 ? 'var(--primary-text)' : 'var(--negative)' }}>{formatCurrency(totalGeral)}</div>
+                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Valor médio</div>
+                    <div style={{ fontWeight: 800, fontSize: 18 }}>{formatCurrency(media)}</div>
                   </div>
+                  {!ehReceita && emAberto > 0 && (
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Em aberto</div>
+                      <div style={{ fontWeight: 800, fontSize: 18, color: 'var(--warning-strong)' }}>{formatCurrency(emAberto)}</div>
+                    </div>
+                  )}
                 </div>
+                {ehReceita && (
+                  <p style={{ margin: '12px 0 0', fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', lineHeight: 1.5 }}>
+                    Este total soma o valor de cada contrato uma vez. O faturamento realizado, com as parcelas dos recorrentes, está em Relatórios.
+                  </p>
+                )}
               </Card>
             ) : (
               <Card style={{ padding: 0 }}>
@@ -2895,18 +3300,16 @@ function LancamentosPage({ data, role, currentVendedorId, onEdit, onImportClick 
                     <thead>
                       <tr>
                         <th scope="col">Mês</th>
-                        <th scope="col" style={{ textAlign: 'right' }}>Receitas</th>
-                        <th scope="col" style={{ textAlign: 'right' }}>Despesas</th>
-                        <th scope="col" style={{ textAlign: 'right' }}>Saldo</th>
+                        <th scope="col" style={{ textAlign: 'right' }}>Lançamentos</th>
+                        <th scope="col" style={{ textAlign: 'right' }}>{ehReceita ? 'Receitas' : 'Despesas'}</th>
                       </tr>
                     </thead>
                     <tbody>
                       {mensalRows.map((r) => (
                         <tr key={r.key}>
                           <td style={{ whiteSpace: 'nowrap' }}>{r.label}</td>
-                          <td className="lomuz-num" style={{ textAlign: 'right', color: 'var(--positive)' }}>{formatCurrency(r.receitas)}</td>
-                          <td className="lomuz-num" style={{ textAlign: 'right', color: 'var(--negative)' }}>{formatCurrency(r.despesas)}</td>
-                          <td className="lomuz-num" style={{ textAlign: 'right', fontWeight: 700 }}>{formatCurrency(r.saldo)}</td>
+                          <td className="lomuz-num" style={{ textAlign: 'right' }}>{r.qtd}</td>
+                          <td className="lomuz-num" style={{ textAlign: 'right', fontWeight: 700, color: ehReceita ? 'var(--positive)' : 'var(--negative)' }}>{formatCurrency(r.valor)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -3488,9 +3891,14 @@ function PlanoForm({ plano, categories, servicos, onSubmit, onCancel }) {
   );
 }
 
+// Os cadastros deixaram de ser seção própria no menu e viraram abas de
+// Clientes: são todos cadastro de apoio, o cliente é o principal, e assim a
+// barra de navegação fica com 7 seções em vez de 8. A aba "Clientes" é a
+// primeira e é o que abre por padrão.
 const CADASTROS_TABS = [
-  { key: 'categorias', label: 'Categorias' },
+  { key: 'clientes', label: 'Clientes' },
   { key: 'fornecedores', label: 'Fornecedores' },
+  { key: 'categorias', label: 'Categorias' },
   { key: 'planos', label: 'Planos negociados' },
   { key: 'servicos', label: 'Serviços' },
   { key: 'ramos', label: 'Ramos de negócio' },
@@ -3551,7 +3959,6 @@ function CadastroSimplesTab({ subTab, setSubTab, config, onSave, onRemove }) {
 
   return (
     <div style={{ paddingTop: 12 }}>
-      <CadastrosTabNav subTab={subTab} setSubTab={setSubTab} />
       <PageToolbar desc={desc} actionLabel={config.novoLabel || 'Novo'} onAction={() => { setEditing(null); setShowForm(true); }} />
 
       {itens.length === 0 ? (
@@ -3810,7 +4217,6 @@ function FornecedoresTab({ subTab, setSubTab, fornecedores, transactions, onSave
 
   return (
     <div style={{ paddingTop: 12 }}>
-      <CadastrosTabNav subTab={subTab} setSubTab={setSubTab} />
       <PageToolbar
         desc="Quem a empresa paga: fornecedor, banco, imposto, salário. Cada despesa aponta para um fornecedor, e é isso que permite ver quanto já foi pago a cada um."
         actionLabel="Novo fornecedor"
@@ -3961,7 +4367,6 @@ function CategoriasPage({ data, persist, askConfirm, subTab, setSubTab }) {
   if (subTab === 'planos') {
     return (
       <div style={{ paddingTop: 12 }}>
-        <CadastrosTabNav subTab={subTab} setSubTab={setSubTab} />
         <PageToolbar
           desc="Planos com preço e comissão já definidos. Quando o vendedor escolhe um plano ao lançar a venda, os campos vêm preenchidos — e você ainda pode ajustar antes de aprovar."
           actionLabel="Novo plano"
@@ -4065,7 +4470,6 @@ function CategoriasPage({ data, persist, askConfirm, subTab, setSubTab }) {
 
   return (
     <div style={{ paddingTop: 12 }}>
-      <CadastrosTabNav subTab={subTab} setSubTab={setSubTab} />
       <PageToolbar
         desc="Categorias organizam suas receitas e despesas — é o que alimenta os gráficos, a previsão e o ranking de produtos."
         actionLabel="Nova categoria"
@@ -4396,6 +4800,116 @@ const FALTAS_CLIENTE = [
 ];
 
 function faltasDoCliente(c) { return FALTAS_CLIENTE.filter((f) => f.falta(c)); }
+
+/* -------------------------------------------------------------------------
+   ORIENTAÇÃO DE LANÇAMENTO
+
+   O usuário não é contador. Em vez de exigir que ele aprenda plano de contas,
+   o sistema aprende com o que ele já lançou: 3.420 despesas históricas dizem
+   em que categoria cada fornecedor costuma cair e se aquele gasto é fixo ou
+   variável. Na hora de lançar, isso volta como sugestão — nunca preenchido
+   sozinho sem avisar, pra ele não gravar algo que não conferiu.
+   ------------------------------------------------------------------------- */
+
+// O que o histórico diz sobre um fornecedor: categoria mais usada, quantas
+// vezes, se costuma ser custo fixo, e o valor típico (mediana, que não é
+// distorcida por um lançamento fora do padrão como a média seria).
+function historicoDoFornecedor(transactions, nomeFornecedor) {
+  const chave = (nomeFornecedor || '').trim().toLowerCase();
+  if (!chave) return null;
+  const iguais = transactions.filter((t) => t.tipo === 'despesa' && (t.clienteNome || '').trim().toLowerCase() === chave);
+  if (iguais.length === 0) return null;
+
+  const porCategoria = new Map();
+  let fixas = 0;
+  let variaveis = 0;
+  iguais.forEach((t) => {
+    if (t.categoriaId) porCategoria.set(t.categoriaId, (porCategoria.get(t.categoriaId) || 0) + 1);
+    if (t.despesaFixa === true) fixas += 1;
+    if (t.despesaFixa === false) variaveis += 1;
+  });
+  const [categoriaId, vezes] = [...porCategoria.entries()].sort((a, b) => b[1] - a[1])[0] || [null, 0];
+
+  const valores = iguais.map((t) => t.valor).sort((a, b) => a - b);
+  const meio = Math.floor(valores.length / 2);
+  const valorTipico = valores.length % 2 ? valores[meio] : round2((valores[meio - 1] + valores[meio]) / 2);
+
+  return {
+    lancamentos: iguais.length,
+    categoriaId,
+    vezesNaCategoria: vezes,
+    fixaSugerida: fixas === 0 && variaveis === 0 ? null : fixas >= variaveis,
+    valorTipico,
+    ultimo: iguais.map((t) => t.data).sort().pop() || null,
+  };
+}
+
+// Avisos de boa prática na hora de lançar uma despesa. Cada um existe porque
+// erra-se de verdade nesse ponto e o erro distorce um número que o dono olha.
+function avisosDaDespesa(draft, categoria, historico) {
+  const avisos = [];
+  const valor = parseFloat(draft.valor) || 0;
+  const descricao = `${draft.descricao || ''} ${draft.clienteNome || ''}`.toLowerCase();
+
+  if (valor > 0 && valor <= 1) {
+    avisos.push({
+      tom: 'danger',
+      texto: 'Valor de centavos. Confira: a base já tem lançamentos de R$ 0,01 que entraram por erro de digitação e ficaram anos cobrando o valor errado.',
+    });
+  }
+
+  if (historico && historico.valorTipico > 0 && valor > 0) {
+    const razao = valor / historico.valorTipico;
+    if (razao >= 3 || razao <= 1 / 3) {
+      avisos.push({
+        tom: 'warning',
+        texto: `Este fornecedor costuma ser ${formatCurrency(historico.valorTipico)} (${historico.lancamentos} lançamento(s) anteriores). O valor digitado está bem fora disso — confira se não faltou ou sobrou um zero.`,
+      });
+    }
+  }
+
+  // Retirada de sócio, empréstimo e compra de bem não são despesa operacional:
+  // jogados no meio das outras, fazem a margem parecer pior do que é.
+  if (/(retirada|pr[óo]-?labore|prolabore|dividendo|distribui[çc][ãa]o de lucro|s[óo]cio)/.test(descricao)) {
+    avisos.push({
+      tom: 'info',
+      texto: 'Parece retirada de sócio. Vale ter uma categoria só pra isso: não é custo de operar a empresa, e misturada com as outras despesas ela faz o resultado operacional parecer pior do que é.',
+    });
+  }
+  if (/(empr[ée]stimo|financiamento|parcela do banco|consignado)/.test(descricao)) {
+    avisos.push({
+      tom: 'info',
+      texto: 'Parece parcela de empréstimo ou financiamento. O ideal é separar em duas categorias: os juros são despesa do mês, a parte que abate a dívida não é.',
+    });
+  }
+  if (/(equipamento|computador|notebook|m[óo]vel|m[óo]veis|ve[íi]culo|carro novo|reforma|obra)/.test(descricao) && valor >= 1000) {
+    avisos.push({
+      tom: 'info',
+      texto: 'Parece compra de bem (equipamento, veículo, reforma). Lançar de uma vez faz o mês parecer muito pior. Se o bem vai durar anos, o mais correto é registrar como investimento em categoria própria.',
+    });
+  }
+  if (/(casa|pessoal|particular|fam[íi]lia|supermercado do m[êe]s)/.test(descricao)) {
+    avisos.push({
+      tom: 'info',
+      texto: 'Isso parece gasto pessoal. Se for, mantenha numa categoria separada das despesas da empresa — senão o custo do negócio fica inflado e a decisão sai errada.',
+    });
+  }
+
+  if (!draft.categoriaId) {
+    avisos.push({ tom: 'warning', texto: 'Escolha uma categoria: é ela que responde "para onde meu dinheiro foi" em todos os relatórios.' });
+  }
+  if (!(draft.clienteNome || '').trim()) {
+    avisos.push({ tom: 'warning', texto: 'Informe o fornecedor. Sem ele, essa despesa não entra na conta de quanto você paga para cada um.' });
+  }
+  if (draft.pago === false && !draft.dataVencimento) {
+    avisos.push({ tom: 'warning', texto: 'Conta em aberto sem data de vencimento não aparece no aviso de contas a pagar.' });
+  }
+  if (categoria && categoria.tipo === 'receita') {
+    avisos.push({ tom: 'danger', texto: 'A categoria escolhida é de receita, mas o lançamento é de despesa. Isso troca o sinal do valor nos relatórios.' });
+  }
+
+  return avisos;
+}
 
 function ClientesPage({ data, role, persist, askConfirm }) {
   const [busca, setBusca] = useState('');
@@ -5314,16 +5828,22 @@ const AJUDA_SECOES = [
     ],
   },
   {
-    key: 'lancamentos',
+    key: 'receitas',
     icon: Receipt,
-    titulo: 'Lançamentos e vendas',
+    titulo: 'Receitas e Despesas',
     todos: true,
     itens: [
-      ['Receita e despesa', 'Receita é dinheiro que entra, despesa é dinheiro que sai. O botão + no meio da barra de baixo abre o menu para lançar cliente, venda, receita ou despesa.'],
+      ['Duas telas separadas', 'Receitas mostra tudo que entra, Despesas mostra tudo que sai. São entradas separadas no menu porque quem abre a tela já sabe o que quer ver, e cada lado tem filtros próprios.'],
+      ['Como lançar', 'O botão fixo no canto inferior direito (no celular, o + no meio da barra de baixo) abre o menu para lançar cliente, venda, receita ou despesa de qualquer tela do sistema.'],
       ['Lançamento recorrente', 'Marque "Recorrente" quando a cobrança se repete todo mês (contrato de rádio, aluguel, assinatura). O sistema projeta os meses seguintes sozinho — não precisa lançar de novo a cada mês.'],
-      ['Conta em aberto', 'Desligue "Já foi pago/recebido" e informe o vencimento quando a conta ainda não foi quitada. Ela passa a aparecer nos cartões de vencimento e atraso.'],
-      ['Venda aguardando aprovação', 'Toda venda lançada por um vendedor entra como pendente e não conta em saldo, meta nem comissão até o administrador revisar e aprovar.'],
-      ['Filtros', 'Use os filtros de Tipo, Período, Recorrência e Categoria para achar um lançamento específico. A busca por texto procura por cliente, descrição ou categoria.'],
+      ['Conta em aberto', 'Desligue "Já foi pago/recebido" e informe o vencimento quando a conta ainda não foi quitada. Ela passa a aparecer nos cartões de vencimento e atraso, e no filtro "Em aberto" das Despesas.'],
+      ['Venda aguardando aprovação', 'Toda venda lançada por um vendedor entra como pendente e não conta em saldo, meta nem comissão até o administrador revisar e aprovar. O filtro "Aprovação" separa as três situações.'],
+      ['Buscas em Receitas', 'Busca por texto (cliente, descrição ou categoria), período, forma de cobrança (recorrente ou venda única), situação do contrato (ativo, cancelado, em teste), aprovação, categoria, vendedor e ordem (mais recente, mais antiga, maior ou menor valor).'],
+      ['Buscas em Despesas', 'Busca por texto (fornecedor, descrição ou categoria), período, pagamento (pagas ou em aberto), tipo de custo (fixo ou variável), categoria, fornecedor e ordem.'],
+      ['Total do filtro', 'No fim de cada lista, o total do que está filtrado, a quantidade e o valor médio — com opção de ver por mês. E o botão "Baixar CSV" leva exatamente as linhas filtradas para o Excel.'],
+      ['Por que o total de Receitas é menor que o dos Relatórios', 'Nesta lista cada contrato aparece uma vez, com o valor dele. Nos Relatórios o contrato recorrente é multiplicado pelos meses em que esteve ativo — é o faturamento de fato.'],
+      ['Cadastro incompleto', 'Um aviso no topo de Receitas e Despesas mostra quantos lançamentos estão sem categoria, sem cliente/fornecedor, sem custo fixo/variável definido ou com valor de centavos — cada item diz por que aquilo importa e filtra a lista pra você corrigir. É a mesma ideia do aviso que existe em Clientes.'],
+      ['Sugestão ao lançar uma despesa', 'Ao digitar o fornecedor, o sistema mostra o que você já lançou pra ele antes — a categoria mais usada, se costuma ser custo fixo ou variável, e o valor típico — com um botão para aplicar a sugestão. Também aparecem avisos quando o valor foge muito do padrão daquele fornecedor, quando a descrição parece retirada de sócio, empréstimo, compra de bem ou gasto pessoal (essas quatro coisas distorcem o resultado se forem lançadas junto com o custo normal da operação), ou quando falta categoria, fornecedor ou vencimento. Nenhum aviso impede de salvar — quem decide é você, o sistema só aponta o que costuma dar problema.'],
     ],
   },
   {
@@ -5780,7 +6300,7 @@ export default function App() {
   const [role, setRole] = useState('vendedor');
   const [currentVendedorId, setCurrentVendedorId] = useState(null);
   const [period, setPeriod] = useState({ type: 'mes_atual', start: '', end: '' });
-  const [cadastroTab, setCadastroTab] = useState('categorias');
+  const [cadastroTab, setCadastroTab] = useState('clientes');
   const [relatorioTab, setRelatorioTab] = useState('resultado');
 
   const [showAddTx, setShowAddTx] = useState(false);
@@ -5822,7 +6342,10 @@ export default function App() {
     else setData(null);
   }, [session]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { if (role === 'vendedor' && (page === 'categorias' || page === 'relatorios')) setPage('inicio'); }, [role]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (role === 'vendedor' && (page === 'despesas' || page === 'relatorios')) setPage('inicio'); }, [role]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Vendedor não tem cadastros: se a aba tivesse ficado em outra, a página de
+  // Clientes abriria vazia pra ele.
+  useEffect(() => { if (role === 'vendedor') setCadastroTab('clientes'); }, [role]);
 
   async function loadData(s) {
     const userId = s.user.id;
@@ -6289,29 +6812,44 @@ export default function App() {
   }
 
   const primeiroNome = (nome || '').trim().split(/\s+/)[0] || '';
+  // Título da página de Clientes acompanha a aba aberta: a página abriga os
+  // cadastros todos, e "Clientes" no cabeçalho enquanto a tela mostra Serviços
+  // seria confuso.
+  const tituloCadastro = CADASTROS_TABS.find((t) => t.key === cadastroTab)?.label || 'Clientes';
   const pageTitles = {
     inicio: 'Visão geral',
-    lancamentos: role === 'vendedor' ? 'Suas vendas' : 'Lançamentos',
+    receitas: role === 'vendedor' ? 'Suas vendas' : 'Receitas',
+    despesas: 'Despesas',
     previsao: role === 'vendedor' ? 'Sua previsão' : 'Previsão',
-    clientes: 'Clientes',
+    clientes: role === 'vendedor' ? 'Clientes' : tituloCadastro,
     relatorios: 'Relatórios',
-    categorias: 'Cadastros',
     config: 'Configurações',
     ajuda: 'Ajuda',
+  };
+  const subtitulosCadastro = {
+    clientes: 'Cadastro de clientes, com busca, filtros, aviso de cadastro incompleto e de reajuste de contrato.',
+    fornecedores: 'Quem a empresa paga, com quanto já foi pago e quanto está em aberto para cada um.',
+    categorias: 'Os grupos que organizam receitas e despesas nos relatórios.',
+    planos: 'Combinações prontas de preço e comissão para agilizar o lançamento da venda.',
+    servicos: 'O que a empresa vende de fato. Todo plano aponta para um serviço.',
+    ramos: 'Classificação do cliente, usada nos filtros e na análise por segmento.',
+    indices: 'Índices financeiros do reajuste anual de contrato.',
   };
   const pageSubtitles = {
     inicio: primeiroNome
       ? `Olá, ${primeiroNome}. Aqui está o resumo financeiro.`
       : 'Aqui está o resumo financeiro.',
-    lancamentos: role === 'vendedor'
+    receitas: role === 'vendedor'
       ? 'Suas vendas lançadas e o status de aprovação de cada uma.'
-      : 'Todas as receitas e despesas, com filtro por tipo e categoria.',
+      : 'Tudo que entra, com busca por cliente, período, categoria, contrato e vendedor.',
+    despesas: 'Tudo que sai, com busca por fornecedor, período, categoria, pagamento e tipo de custo.',
     previsao: role === 'vendedor'
       ? 'Sua projeção de vendas, metas e comissão.'
       : 'Projeção financeira e panorama da equipe de vendas.',
-    clientes: 'Cadastro de clientes, com busca, filtros e aviso de reajuste de contrato.',
+    clientes: role === 'vendedor'
+      ? 'Cadastro de clientes, com busca e filtros.'
+      : subtitulosCadastro[cadastroTab] || subtitulosCadastro.clientes,
     relatorios: 'Resultado, despesas, receita, contratos e vencimentos — cada um com opção de baixar em CSV.',
-    categorias: 'Categorias, fornecedores, planos, serviços, ramos de negócio e índices de reajuste.',
     config: 'Aparência, usuários e mural de orientação.',
     ajuda: 'Como usar cada parte do sistema, explicado passo a passo.',
   };
@@ -6353,22 +6891,51 @@ export default function App() {
         pageTitle={pageTitles[page] || 'Lomuz Control'}
         pageSubtitle={pageSubtitles[page]}
         alerts={alerts}
-        onAlertClick={(a) => setPage(a.page || 'inicio')}
-        submenus={role !== 'vendedor' ? { categorias: CADASTROS_TABS, relatorios: RELATORIOS_TABS } : {}}
-        activeSubKey={{ categorias: cadastroTab, relatorios: relatorioTab }}
+        onAlertClick={(a) => {
+          // Aviso de cliente leva pra aba de clientes, não pra aba de cadastro
+          // que estivesse aberta antes.
+          if (a.page === 'clientes') setCadastroTab('clientes');
+          setPage(a.page || 'inicio');
+        }}
+        submenus={role !== 'vendedor' ? { clientes: CADASTROS_TABS, relatorios: RELATORIOS_TABS } : {}}
+        activeSubKey={{ clientes: cadastroTab, relatorios: relatorioTab }}
         onSubSelect={(secao, subKey) => (secao === 'relatorios' ? setRelatorioTab(subKey) : setCadastroTab(subKey))}
       >
         {page === 'inicio' && (
           <Dashboard data={data} role={role} currentVendedorId={currentVendedorId} period={period} setPeriod={setPeriod} onAddClick={openAddTransaction} onGoTo={setPage} onActivateNow={activateNow} onCustomizeClick={() => setShowCustomize(true)} onReviewSale={openEditTransaction} onEditMural={() => setShowMural(true)} />
         )}
-        {page === 'lancamentos' && (
-          <LancamentosPage data={data} role={role} currentVendedorId={currentVendedorId} onEdit={openEditTransaction} onImportClick={() => setShowImportCsv(true)} />
+        {page === 'receitas' && (
+          <MovimentosPage
+            data={data} role={role} currentVendedorId={currentVendedorId} tipo="receita"
+            onEdit={openEditTransaction}
+            onImportClick={() => setShowImportCsv(true)}
+            onNovo={() => openAddTransaction('receita')}
+          />
+        )}
+        {page === 'despesas' && role !== 'vendedor' && (
+          <MovimentosPage
+            data={data} role={role} currentVendedorId={currentVendedorId} tipo="despesa"
+            onEdit={openEditTransaction}
+            onImportClick={() => setShowImportCsv(true)}
+            onNovo={() => openAddTransaction('despesa')}
+          />
         )}
         {page === 'previsao' && (
           <PrevisaoPage data={data} role={role} currentVendedorId={currentVendedorId} persist={persist} askConfirm={askConfirm} />
         )}
+        {/* Clientes é a casa dos cadastros: a aba "Clientes" mostra a lista de
+            clientes, as outras mostram os cadastros de apoio. Vendedor só vê a
+            primeira, então nem a barra de abas aparece pra ele. */}
         {page === 'clientes' && (
-          <ClientesPage data={data} role={role} persist={persist} askConfirm={askConfirm} />
+          <div>
+            {/* Sem paddingTop aqui: ClientesPage e CategoriasPage já abrem com
+                o próprio espaçamento — um wrapper com padding duplicaria o
+                respiro no topo da tela. */}
+            {role !== 'vendedor' && <CadastrosTabNav subTab={cadastroTab} setSubTab={setCadastroTab} />}
+            {(role === 'vendedor' || cadastroTab === 'clientes')
+              ? <ClientesPage data={data} role={role} persist={persist} askConfirm={askConfirm} />
+              : <CategoriasPage data={data} persist={persist} askConfirm={askConfirm} subTab={cadastroTab} setSubTab={setCadastroTab} />}
+          </div>
         )}
         {page === 'relatorios' && role !== 'vendedor' && (
           <RelatoriosPage
@@ -6381,9 +6948,6 @@ export default function App() {
         )}
         {page === 'ajuda' && (
           <AjudaPage role={role} />
-        )}
-        {page === 'categorias' && role !== 'vendedor' && (
-          <CategoriasPage data={data} persist={persist} askConfirm={askConfirm} subTab={cadastroTab} setSubTab={setCadastroTab} />
         )}
         {page === 'config' && (
           <ConfiguracoesPage
@@ -6457,6 +7021,7 @@ export default function App() {
                 vendedores={data.vendedores}
                 planos={data.planos}
                 fornecedores={data.fornecedores}
+                transactions={data.transactions}
                 onSubmit={handleFormSubmit}
                 onCancel={closeTxModal}
                 onDelete={editingTx ? () => requestDeleteTransaction(editingTx) : null}
