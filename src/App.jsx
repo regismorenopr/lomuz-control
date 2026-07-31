@@ -1202,7 +1202,9 @@ const PERIOD_PRESETS_PADRAO = [
   { key: 'mes_atual', label: 'Este mês' },
   { key: 'proximos_3', label: 'Próx. 3 meses' },
   { key: 'proximos_6', label: 'Próx. 6 meses' },
-  { key: 'ano', label: 'Por ano' },
+  // O rótulo do ano é montado no PeriodSelector: vira "Este ano" no ano
+  // corrente e "Ano de 2025" quando as setas mudam de ano.
+  { key: 'ano', label: 'Este ano' },
   { key: 'custom', label: 'Personalizado' },
 ];
 
@@ -1214,7 +1216,7 @@ const PERIOD_PRESETS_RELATORIO = [
   { key: 'mes_passado', label: 'Mês passado' },
   { key: 'ultimos_3', label: 'Últimos 3 meses' },
   { key: 'ultimos_12', label: 'Últimos 12 meses' },
-  { key: 'ano', label: 'Por ano' },
+  { key: 'ano', label: 'Este ano' },
   { key: 'custom', label: 'Personalizado' },
 ];
 
@@ -1237,7 +1239,9 @@ function YearStepper({ ano, onChange, anoMin, anoMax }) {
       <button type="button" onClick={() => ano < anoMax && onChange(ano + 1)} disabled={ano >= anoMax} aria-label={`Ano seguinte (${ano + 1})`} style={btn(ano >= anoMax)}>
         <ChevronRight size={17} />
       </button>
-      <span style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', marginLeft: 4 }}>janeiro a dezembro</span>
+      <span style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', marginLeft: 4, lineHeight: 1.4 }}>
+        01/01/{ano} a 31/12/{ano} — os 12 meses
+      </span>
     </div>
   );
 }
@@ -1273,7 +1277,15 @@ function PeriodSelector({ value, onChange, presets = PERIOD_PRESETS_PADRAO, anoM
     <div>
       <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
         {presets.map((p) => (
-          <Chip key={p.key} active={value.type === p.key} onClick={() => selectPreset(p.key)}>{p.label}</Chip>
+          // O botão do ano se chama "Este ano" enquanto mostra o ano corrente —
+          // é o nome que a pessoa procura — e passa a dizer qual ano quando as
+          // setas levam pra outro. Rótulo fixo "Por ano" fazia o usuário não
+          // achar o que antes se chamava "Este ano".
+          <Chip key={p.key} active={value.type === p.key} onClick={() => selectPreset(p.key)}>
+            {(p.key === 'ano' && value.type === 'ano' && value.ano && value.ano !== anoHoje)
+              ? `Ano de ${value.ano}`
+              : (p.key === 'ano' ? 'Este ano' : p.label)}
+          </Chip>
         ))}
       </div>
       {value.type === 'ano' && (
@@ -2226,6 +2238,13 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
   function toggleFocus(key) {
     setFocusMetric((cur) => (cur === key ? null : key));
   }
+
+  // Escolher um ano é pedir os 12 meses: a tabela mês a mês abre junto, sem
+  // exigir um segundo clique. Nos outros períodos o padrão continua sendo o
+  // total, que é o que interessa num recorte curto.
+  useEffect(() => {
+    if (period.type === 'ano') setResumoMode('mensal');
+  }, [period.type, period.ano]);
 
   const txs = scopedTransactions(data, role, currentVendedorId);
   const range = getPeriodRange(period);
