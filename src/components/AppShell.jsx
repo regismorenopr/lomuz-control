@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Home, Receipt, TrendingUp, Tag, Settings, Bell, LogOut, ChevronDown, Users, Clock, HelpCircle } from 'lucide-react';
+import { Home, Receipt, TrendingUp, Tag, Settings, Bell, LogOut, ChevronDown, Users, BarChart3, HelpCircle } from 'lucide-react';
 import { LogoHorizontal } from '../brand/Logo.jsx';
 
 /* =========================================================================
@@ -23,7 +23,10 @@ export function navItemsFor(role) {
     { key: 'clientes', label: 'Clientes', icon: Users },
   ];
   if (role !== 'vendedor') {
-    base.push({ key: 'vencimentos', label: 'Vencimentos', icon: Clock });
+    // Vencimentos virou uma aba de Relatórios: é relatório do mesmo jeito que
+    // os outros, e manter as duas coisas separadas colocaria 8 seções numa
+    // barra que comporta 7 (no celular são 7 ícones dividindo ~317px).
+    base.push({ key: 'relatorios', label: 'Relatórios', icon: BarChart3 });
     // "Cadastros" e não "Categorias": a página abriga 6 cadastros diferentes
     // (categorias, fornecedores, planos, serviços, ramos, índices), e o nome
     // antigo descrevia só o primeiro deles.
@@ -293,7 +296,9 @@ export function AppShell({
   role, nome, page, setPage, onLogout,
   pageTitle, pageSubtitle,
   alerts = [], onAlertClick,
-  submenus = {}, activeSubKey, onSubSelect,
+  // activeSubKey é um mapa { chaveDaSeção: subAbaAtiva } porque hoje duas
+  // seções têm submenu (Cadastros e Relatórios) e cada uma guarda a sua.
+  submenus = {}, activeSubKey = {}, onSubSelect,
   children,
 }) {
   const items = navItemsFor(role);
@@ -317,8 +322,8 @@ export function AppShell({
                   item={it}
                   active={page === it.key}
                   subItems={submenus[it.key]}
-                  activeSubKey={activeSubKey}
-                  onSelect={(subKey) => { onSubSelect(subKey); setPage(it.key); }}
+                  activeSubKey={activeSubKey?.[it.key]}
+                  onSelect={(subKey) => { onSubSelect(it.key, subKey); setPage(it.key); }}
                 />
               ) : (
                 <TopNavItem key={it.key} item={it} active={page === it.key} onClick={() => setPage(it.key)} />

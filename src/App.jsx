@@ -8,6 +8,7 @@ import {
   ArrowUpCircle, ArrowDownCircle, Users, Trash2, Edit2, Clock, Target, Upload,
   Utensils, Car, Film, HeartPulse, ShoppingBag, Briefcase, GraduationCap, Wallet,
   Gift, Smartphone, PawPrint, MoreHorizontal, Sparkles, Megaphone, Pin, FileText, Palette, Search, Settings,
+  Download,
 } from 'lucide-react';
 import Papa from 'papaparse';
 import { supabase } from './supabaseClient';
@@ -154,6 +155,10 @@ function txToRow(tx, userId) {
     pago: tx.pago !== false,
     data_vencimento: tx.dataVencimento || null,
     ultima_confirmacao: tx.ultimaConfirmacao || null,
+    // Só despesa tem custo fixo/variável. As 3.420 despesas importadas já vêm
+    // classificadas; o null existe porque a coluna nasceu sem valor padrão, e o
+    // relatório mostra esse grupo como "não classificada" em vez de fingir.
+    despesa_fixa: tx.tipo === 'despesa' ? (tx.despesaFixa == null ? null : !!tx.despesaFixa) : null,
   };
 }
 function rowToTx(row) {
@@ -183,6 +188,7 @@ function rowToTx(row) {
     pago: row.pago !== false,
     dataVencimento: row.data_vencimento || null,
     ultimaConfirmacao: row.ultima_confirmacao || null,
+    despesaFixa: row.despesa_fixa == null ? null : !!row.despesa_fixa,
   };
 }
 function planoToRow(p) {
@@ -440,6 +446,52 @@ function sumByPeriod(transactions, tipo, rangeStart, rangeEnd) {
   return { total: round2(total), count, byCategory, countByCategory };
 }
 
+// Soma por uma chave qualquer — categoria, fornecedor, cliente — já expandindo
+// as recorrências dentro do período. Mesma regra do resto do app: o realizado
+// de um contrato mensal é o valor dele × o número de cobranças no período, não
+// o valor do contrato uma vez só.
+function sumByKey(transactions, tipo, rangeStart, rangeEnd, keyFn) {
+  const map = new Map();
+  let total = 0;
+  transactions.forEach((tx) => {
+    if (tx.tipo !== tipo) return;
+    const chave = keyFn(tx);
+    if (chave == null || chave === '') return;
+    const occ = expandOccurrences(tx, rangeStart, rangeEnd);
+    if (occ.length === 0) return;
+    const valor = tx.valor * occ.length;
+    const r = map.get(chave) || { chave, valor: 0, cobrancas: 0, lancamentos: 0 };
+    r.valor += valor;
+    r.cobrancas += occ.length;
+    r.lancamentos += 1;
+    map.set(chave, r);
+    total += valor;
+  });
+  const rows = [...map.values()]
+    .map((r) => ({ ...r, valor: round2(r.valor), pct: total > 0 ? (r.valor / total) * 100 : 0 }))
+    .sort((a, b) => b.valor - a.valor);
+  return { rows, total: round2(total) };
+}
+
+// Número no formato que o Excel em português entende (vírgula decimal).
+function numeroCSV(v) { return (Math.round((v || 0) * 100) / 100).toFixed(2).replace('.', ','); }
+
+// Baixa uma tabela como CSV. Três detalhes que decidem se o arquivo abre certo
+// no Excel em português: separador ponto-e-vírgula, vírgula decimal (numeroCSV)
+// e o BOM no começo — sem o BOM os acentos viram sujeira.
+function baixarCSV(nomeArquivo, linhas) {
+  const csv = Papa.unparse(linhas, { delimiter: ';' });
+  const blob = new Blob([String.fromCharCode(0xFEFF) + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = nomeArquivo;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function getPeriodRange(period) {
   const today = new Date();
   switch (period.type) {
@@ -449,12 +501,23 @@ function getPeriodRange(period) {
     }
     case 'ultimos_3':
       return { start: startOfMonth(addMonths(today, -2)), end: endOfMonth(today) };
+    case 'ultimos_12':
+      return { start: startOfMonth(addMonths(today, -11)), end: endOfMonth(today) };
+    case 'ano_passado':
+      return { start: new Date(today.getFullYear() - 1, 0, 1), end: new Date(today.getFullYear() - 1, 11, 31) };
     case 'proximos_3':
       return { start: startOfMonth(today), end: endOfMonth(addMonths(today, 2)) };
     case 'proximos_6':
       return { start: startOfMonth(today), end: endOfMonth(addMonths(today, 5)) };
     case 'ano_atual':
       return { start: new Date(today.getFullYear(), 0, 1), end: new Date(today.getFullYear(), 11, 31) };
+    // Janeiro a dezembro de um ano escolhido — o seletor deixa recuar pra anos
+    // anteriores e avançar pros seguintes, e o ano corrente sai com os meses já
+    // realizados mais a projeção dos contratos até dezembro.
+    case 'ano': {
+      const y = period.ano || today.getFullYear();
+      return { start: new Date(y, 0, 1), end: new Date(y, 11, 31) };
+    }
     case 'custom':
       return {
         start: period.start ? parseISODate(period.start) : startOfMonth(today),
@@ -470,7 +533,7 @@ function getPeriodRange(period) {
 function periodLabel(period) {
   const { start, end } = getPeriodRange(period);
   if (period.type === 'custom') return `${formatDateBR(toISODate(start))} a ${formatDateBR(toISODate(end))}`;
-  if (period.type === 'ano_atual') return `Ano de ${start.getFullYear()}`;
+  if (period.type === 'ano' || period.type === 'ano_atual' || period.type === 'ano_passado') return `Ano de ${start.getFullYear()}`;
   if (start.getFullYear() === end.getFullYear() && start.getMonth() === end.getMonth()) return mesAnoLabel(start);
   if (start.getFullYear() === end.getFullYear()) {
     return `${MONTH_NAMES[start.getMonth()]} a ${MONTH_NAMES[end.getMonth()]} ${start.getFullYear()}`;
@@ -494,12 +557,20 @@ function getPreviousPeriodRange(period) {
     }
     case 'ultimos_3':
       return { start: startOfMonth(addMonths(today, -5)), end: endOfMonth(addMonths(today, -3)) };
+    case 'ultimos_12':
+      return { start: startOfMonth(addMonths(today, -23)), end: endOfMonth(addMonths(today, -12)) };
+    case 'ano_passado':
+      return { start: new Date(today.getFullYear() - 2, 0, 1), end: new Date(today.getFullYear() - 2, 11, 31) };
     case 'proximos_3':
       return { start: startOfMonth(addMonths(today, -3)), end: endOfMonth(addMonths(today, -1)) };
     case 'proximos_6':
       return { start: startOfMonth(addMonths(today, -6)), end: endOfMonth(addMonths(today, -1)) };
     case 'ano_atual':
       return { start: new Date(today.getFullYear() - 1, 0, 1), end: new Date(today.getFullYear() - 1, 11, 31) };
+    case 'ano': {
+      const y = (period.ano || today.getFullYear()) - 1;
+      return { start: new Date(y, 0, 1), end: new Date(y, 11, 31) };
+    }
     case 'custom': {
       const atual = getPeriodRange(period);
       const dias = Math.max(1, Math.round((atual.end - atual.start) / 86400000) + 1);
@@ -821,6 +892,7 @@ function txToDraft(tx) {
     comissaoPercentual: tx.comissaoPercentual != null ? String(tx.comissaoPercentual) : '',
     pago: tx.pago !== false,
     dataVencimento: tx.dataVencimento || '',
+    despesaFixa: tx.despesaFixa === true,
   };
 }
 
@@ -1084,17 +1156,58 @@ function CategoryRow({ cat, last, onEdit, onDelete }) {
    SELETORES DE PERÍODO
    ========================================================================= */
 
-function PeriodSelector({ value, onChange }) {
-  // Ordem cronológica: passado à esquerda, este mês pré-selecionado no meio,
-  // futuro à direita — assim como pedido.
-  const presets = [
-    { key: 'ultimos_3', label: 'Últimos 3 meses' },
-    { key: 'mes_atual', label: 'Este mês' },
-    { key: 'proximos_3', label: 'Próx. 3 meses' },
-    { key: 'proximos_6', label: 'Próx. 6 meses' },
-    { key: 'ano_atual', label: 'Este ano' },
-    { key: 'custom', label: 'Personalizado' },
-  ];
+// Ordem cronológica: passado à esquerda, este mês pré-selecionado no meio,
+// futuro à direita — assim como pedido.
+const PERIOD_PRESETS_PADRAO = [
+  { key: 'ultimos_3', label: 'Últimos 3 meses' },
+  { key: 'mes_atual', label: 'Este mês' },
+  { key: 'proximos_3', label: 'Próx. 3 meses' },
+  { key: 'proximos_6', label: 'Próx. 6 meses' },
+  { key: 'ano', label: 'Por ano' },
+  { key: 'custom', label: 'Personalizado' },
+];
+
+// Relatório olha pra trás, não pra frente: aqui os presets são de histórico
+// fechado (mês passado, 12 meses, ano fechado), sem as janelas futuras que o
+// painel Início usa pra projeção.
+const PERIOD_PRESETS_RELATORIO = [
+  { key: 'mes_atual', label: 'Este mês' },
+  { key: 'mes_passado', label: 'Mês passado' },
+  { key: 'ultimos_3', label: 'Últimos 3 meses' },
+  { key: 'ultimos_12', label: 'Últimos 12 meses' },
+  { key: 'ano', label: 'Por ano' },
+  { key: 'custom', label: 'Personalizado' },
+];
+
+// Navegação de ano no padrão que todo SaaS usa: seta, ano, seta. As setas ficam
+// desabilitadas nas pontas em vez de sumirem, pra pessoa não achar que o
+// controle quebrou.
+function YearStepper({ ano, onChange, anoMin, anoMax }) {
+  const btn = (disabled) => ({
+    width: 34, height: 34, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
+    background: 'var(--surface)', color: disabled ? 'var(--border)' : 'var(--ink)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+    cursor: disabled ? 'default' : 'pointer',
+  });
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+      <button type="button" onClick={() => ano > anoMin && onChange(ano - 1)} disabled={ano <= anoMin} aria-label={`Ano anterior (${ano - 1})`} style={btn(ano <= anoMin)}>
+        <ChevronRight size={17} style={{ transform: 'rotate(180deg)' }} />
+      </button>
+      <div style={{ minWidth: 86, textAlign: 'center', fontSize: 'var(--fs-title)', fontWeight: 800, letterSpacing: '-0.01em' }}>{ano}</div>
+      <button type="button" onClick={() => ano < anoMax && onChange(ano + 1)} disabled={ano >= anoMax} aria-label={`Ano seguinte (${ano + 1})`} style={btn(ano >= anoMax)}>
+        <ChevronRight size={17} />
+      </button>
+      <span style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', marginLeft: 4 }}>janeiro a dezembro</span>
+    </div>
+  );
+}
+
+function PeriodSelector({ value, onChange, presets = PERIOD_PRESETS_PADRAO, anoMin, anoMax }) {
+  const anoHoje = new Date().getFullYear();
+  const minAno = anoMin ?? anoHoje - 10;
+  const maxAno = anoMax ?? anoHoje + 5;
+
   function selectPreset(key) {
     if (key === 'custom') {
       onChange({
@@ -1103,6 +1216,8 @@ function PeriodSelector({ value, onChange }) {
         start: value.start || toISODate(startOfMonth(addMonths(new Date(), -1))),
         end: value.end || toISODate(new Date()),
       });
+    } else if (key === 'ano') {
+      onChange({ ...value, type: 'ano', ano: value.ano || Math.min(anoHoje, maxAno) });
     } else {
       onChange({ ...value, type: key });
     }
@@ -1122,6 +1237,14 @@ function PeriodSelector({ value, onChange }) {
           <Chip key={p.key} active={value.type === p.key} onClick={() => selectPreset(p.key)}>{p.label}</Chip>
         ))}
       </div>
+      {value.type === 'ano' && (
+        <YearStepper
+          ano={value.ano || anoHoje}
+          onChange={(a) => onChange({ ...value, type: 'ano', ano: a })}
+          anoMin={minAno}
+          anoMax={maxAno}
+        />
+      )}
       {value.type === 'custom' && (
         <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' }}>
           <input type="date" value={value.start} onChange={(e) => changeStart(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
@@ -1611,6 +1734,19 @@ function TransactionForm({ draft, categories, role, vendedores, planos, forneced
             {(fornecedores || []).filter((f) => f.ativo !== false).map((f) => <option key={f.id} value={f.nome} />)}
           </datalist>
         </Field>
+      )}
+
+      {/* Custo fixo x variável: as 3.420 despesas importadas já vinham
+          classificadas assim e o relatório de despesas usa essa divisão, então
+          despesa nova também precisa dizer qual das duas é. */}
+      {!isVenda && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)', marginBottom: 14 }}>
+          <div style={{ minWidth: 0, paddingRight: 12 }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>Despesa fixa</div>
+            <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>Ligue para custo que se repete todo mês (aluguel, folha, internet). Desligue para gasto eventual.</div>
+          </div>
+          <Toggle checked={local.despesaFixa === true} onChange={(v) => set('despesaFixa', v)} />
+        </div>
       )}
 
       {isVenda && (
@@ -2284,14 +2420,28 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
                     </tr>
                   </thead>
                   <tbody>
-                    {mesesPeriodo.map((m) => (
-                      <tr key={m.key}>
-                        <td style={{ whiteSpace: 'nowrap' }}>{m.label}</td>
-                        <td className="lomuz-num" style={{ textAlign: 'right', color: 'var(--success)', whiteSpace: 'nowrap' }}>{formatCurrency(m.receitas)}</td>
-                        <td className="lomuz-num" style={{ textAlign: 'right', color: 'var(--danger)', whiteSpace: 'nowrap' }}>{formatCurrency(m.despesas)}</td>
-                        <td className="lomuz-num" style={{ textAlign: 'right', fontWeight: 700, color: m.saldo >= 0 ? 'var(--primary-text)' : 'var(--danger)', whiteSpace: 'nowrap' }}>{formatCurrency(m.saldo)}</td>
-                      </tr>
-                    ))}
+                    {/* Mês que ainda não chegou vem marcado como previsto: num
+                        período tipo "Este ano" as duas coisas convivem na mesma
+                        tabela (o que já aconteceu e a projeção dos contratos até
+                        dezembro), e sem a marca não dá pra saber onde uma acaba
+                        e a outra começa. O mês corrente não é previsão — ele já
+                        está acontecendo. */}
+                    {mesesPeriodo.map((m) => {
+                      const futuro = m.key > monthKey(new Date());
+                      return (
+                        <tr key={m.key}>
+                          <td style={{ whiteSpace: 'nowrap' }}>
+                            {m.label}
+                            {futuro && (
+                              <span style={{ marginLeft: 6, fontSize: 'var(--fs-micro)', fontWeight: 700, color: 'var(--ink-soft)', background: 'var(--surface-2)', borderRadius: 999, padding: '2px 7px' }}>previsto</span>
+                            )}
+                          </td>
+                          <td className="lomuz-num" style={{ textAlign: 'right', color: 'var(--success)', whiteSpace: 'nowrap', opacity: futuro ? 0.75 : 1 }}>{formatCurrency(m.receitas)}</td>
+                          <td className="lomuz-num" style={{ textAlign: 'right', color: 'var(--danger)', whiteSpace: 'nowrap', opacity: futuro ? 0.75 : 1 }}>{formatCurrency(m.despesas)}</td>
+                          <td className="lomuz-num" style={{ textAlign: 'right', fontWeight: 700, color: m.saldo >= 0 ? 'var(--primary-text)' : 'var(--danger)', whiteSpace: 'nowrap', opacity: futuro ? 0.75 : 1 }}>{formatCurrency(m.saldo)}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                   <tfoot>
                     <tr>
@@ -2305,7 +2455,7 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
               </div>
               {incluiFuturo && (
                 <p style={{ margin: 0, padding: '12px 16px', borderTop: '1px solid var(--border)', fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', lineHeight: 1.5 }}>
-                  Este período inclui meses que ainda não aconteceram: esses valores são projeção dos contratos já cadastrados.
+                  Os meses marcados como <strong>previsto</strong> ainda não aconteceram: o valor é a projeção dos contratos recorrentes já cadastrados, seguindo até o fim do período escolhido.
                 </p>
               )}
             </Card>
@@ -4447,6 +4597,398 @@ function VencimentosPage({ data, onConfirmarRecebimento, onEditTransaction }) {
 }
 
 /* =========================================================================
+   PÁGINA: RELATÓRIOS
+   Vencimentos entrou aqui como uma aba em vez de virar a 8ª seção do menu: o
+   cabeçalho do desktop e a barra do celular comportam 7 seções, e vencimento
+   é relatório do mesmo jeito que os outros. Assim a decisão de não ter menu
+   lateral segue valendo.
+   ========================================================================= */
+
+const RELATORIOS_TABS = [
+  { key: 'resultado', label: 'Resultado mês a mês' },
+  { key: 'despesas', label: 'Despesas' },
+  { key: 'receita', label: 'Receita' },
+  { key: 'contratos', label: 'Contratos recorrentes' },
+  { key: 'vencimentos', label: 'Vencimentos' },
+];
+
+function RelatoriosTabNav({ subTab, setSubTab }) {
+  return (
+    <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+      {RELATORIOS_TABS.map((t) => (
+        <Chip key={t.key} active={subTab === t.key} onClick={() => setSubTab(t.key)}>{t.label}</Chip>
+      ))}
+    </div>
+  );
+}
+
+// Tabela de relatório: rolagem horizontal só dentro do bloco (a página nunca
+// rola de lado), totais no pé e um botão que baixa exatamente as linhas que
+// estão na tela — mais as que ficaram fora do limite de exibição, quando houver.
+function RelatorioTabela({ titulo, desc, colunas, linhas, rodape, onBaixar, vazioTexto }) {
+  const cell = (align) => ({
+    padding: '10px 14px', textAlign: align || 'left', whiteSpace: 'nowrap',
+    borderBottom: '1px solid var(--border)',
+  });
+  return (
+    <Card style={{ padding: 0, marginBottom: 18 }}>
+      <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0, flex: '1 1 240px' }}>
+          <div style={{ fontWeight: 800, fontSize: 'var(--fs-title)' }}>{titulo}</div>
+          {desc && <div style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', marginTop: 3, lineHeight: 1.5 }}>{desc}</div>}
+        </div>
+        {onBaixar && linhas.length > 0 && (
+          <Button variant="secondary" onClick={onBaixar} style={{ flexShrink: 0 }}>
+            <Download size={15} /> Baixar CSV
+          </Button>
+        )}
+      </div>
+
+      {linhas.length === 0 ? (
+        <div style={{ padding: '20px 16px', fontSize: 'var(--fs-body)', color: 'var(--ink-soft)' }}>
+          {vazioTexto || 'Nada lançado no período escolhido.'}
+        </div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr>
+                {colunas.map((c) => (
+                  <th key={c.label} style={{ ...cell(c.align), fontSize: 'var(--fs-micro)', textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)', fontWeight: 700, background: 'var(--surface-2)' }}>
+                    {c.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {linhas.map((l, i) => (
+                <tr key={l.chave ?? i}>
+                  {l.celulas.map((v, j) => (
+                    <td key={colunas[j].label} style={{ ...cell(colunas[j].align), fontWeight: j === 0 ? 600 : 400, color: l.tom || 'inherit' }}>{v}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+            {rodape && (
+              <tfoot>
+                <tr>
+                  {rodape.map((v, j) => (
+                    <td key={colunas[j].label} style={{ ...cell(colunas[j].align), borderBottom: 'none', fontWeight: 800, background: 'var(--surface-2)' }}>{v}</td>
+                  ))}
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+const LIMITE_LINHAS_RELATORIO = 30;
+
+function RelatoriosPage({ data, subTab, setSubTab, onConfirmarRecebimento, onEditTransaction }) {
+  // Últimos 12 meses como padrão: é a janela que responde "como foi o ano",
+  // sem depender de o mês atual já ter movimento.
+  const [period, setPeriod] = useState({ type: 'ultimos_12', start: '', end: '' });
+  const [verTudoCliente, setVerTudoCliente] = useState(false);
+  const [verTudoFornecedor, setVerTudoFornecedor] = useState(false);
+
+  const txs = data.transactions;
+  const fornecedores = data.fornecedores || [];
+
+  const calc = useMemo(() => {
+    // Relatório mostra o que já aconteceu. "Este ano" e "Este mês" terminam no
+    // futuro, e sem esse corte a receita recorrente seria projetada pra frente e
+    // somada como se já tivesse entrado — número bonito e falso. Períodos
+    // inteiramente passados (mês/ano passado) não são afetados.
+    const bruto = getPeriodRange(period);
+    const hoje = new Date();
+    const cortado = bruto.end > hoje;
+    const r = cortado ? { start: bruto.start, end: hoje } : bruto;
+    const nomeCategoria = (id) => data.categories.find((c) => c.id === id)?.nome || 'Sem categoria';
+    const nomeFornecedor = (id) => fornecedores.find((f) => f.id === id)?.nome || 'Sem fornecedor informado';
+
+    const meses = buildPeriodMonthlyRows(txs, r).map((m) => ({
+      ...m,
+      margem: m.receitas > 0 ? (m.saldo / m.receitas) * 100 : null,
+    }));
+    const totalReceita = round2(meses.reduce((s, m) => s + m.receitas, 0));
+    const totalDespesa = round2(meses.reduce((s, m) => s + m.despesas, 0));
+
+    const despCategoria = sumByKey(txs, 'despesa', r.start, r.end, (t) => t.categoriaId);
+    const despFornecedor = sumByKey(txs, 'despesa', r.start, r.end, (t) => t.fornecedorId || '__sem__');
+    const despTipoCusto = sumByKey(txs, 'despesa', r.start, r.end, (t) => (t.despesaFixa === true ? 'fixa' : t.despesaFixa === false ? 'variavel' : 'nao_classificada'));
+    const recCategoria = sumByKey(txs, 'receita', r.start, r.end, (t) => t.categoriaId);
+    const recCliente = sumByKey(txs, 'receita', r.start, r.end, (t) => (t.clienteNome || '').trim() || '__sem__');
+
+    // Contratos recorrentes. MRR = quanto entra por mês se nada mudar; semanal e
+    // anual são normalizados pra mês para poderem somar na mesma linha (hoje a
+    // base só tem mensal, mas o cálculo não depende disso).
+    const porMes = (t) => (t.frequencia === 'semanal' ? t.valor * (52 / 12) : t.frequencia === 'anual' ? t.valor / 12 : t.valor);
+    const recorrentes = txs.filter((t) => t.tipo === 'receita' && t.recorrente && t.status === 'aprovado');
+    const ativos = recorrentes.filter((t) => getRecurrenceStatus(t) === 'ativo');
+    const mrr = round2(ativos.reduce((s, t) => s + porMes(t), 0));
+
+    const novosNoPeriodo = recorrentes.filter((t) => { const d = parseISODate(t.data); return d >= r.start && d <= r.end; });
+    const canceladosNoPeriodo = recorrentes.filter((t) => {
+      if (!t.dataCancelamento) return false;
+      const d = parseISODate(t.dataCancelamento);
+      return d >= r.start && d <= r.end;
+    });
+    // Base do cálculo de cancelamento: contratos que já estavam valendo quando o
+    // período começou. Sem essa base, "10 cancelamentos" não diz se é muito ou
+    // pouco.
+    const baseInicio = recorrentes.filter((t) => {
+      if (parseISODate(t.data) > r.start) return false;
+      return !t.dataCancelamento || parseISODate(t.dataCancelamento) >= r.start;
+    });
+    const taxaCancelamento = baseInicio.length > 0 ? (canceladosNoPeriodo.length / baseInicio.length) * 100 : null;
+
+    const contratosPorMes = [];
+    let cursor = startOfMonth(r.start);
+    let safety = 0;
+    while (cursor <= r.end && safety < 240) {
+      const ms = cursor > r.start ? cursor : r.start;
+      const fimMes = endOfMonth(cursor);
+      const me = fimMes < r.end ? fimMes : r.end;
+      const novos = recorrentes.filter((t) => { const d = parseISODate(t.data); return d >= ms && d <= me; });
+      const cancel = recorrentes.filter((t) => { if (!t.dataCancelamento) return false; const d = parseISODate(t.dataCancelamento); return d >= ms && d <= me; });
+      contratosPorMes.push({
+        key: monthKey(cursor), label: mesAnoLabel(cursor),
+        novos: novos.length, cancelados: cancel.length,
+        mrrNovo: round2(novos.reduce((s, t) => s + porMes(t), 0)),
+        mrrPerdido: round2(cancel.reduce((s, t) => s + porMes(t), 0)),
+      });
+      cursor = addMonths(cursor, 1);
+      safety += 1;
+    }
+
+    return {
+      r, cortado, meses, totalReceita, totalDespesa,
+      nomeCategoria, nomeFornecedor,
+      despCategoria, despFornecedor, despTipoCusto, recCategoria, recCliente,
+      mrr, ativos: ativos.length, totalRecorrentes: recorrentes.length,
+      novosNoPeriodo, canceladosNoPeriodo, baseInicio, taxaCancelamento, contratosPorMes,
+    };
+  }, [txs, period, data.categories, fornecedores]);
+
+  const sufixo = `${toISODate(calc.r.start)}_a_${toISODate(calc.r.end)}`;
+  const pct = (v) => (v == null ? '—' : `${v.toFixed(1).replace('.', ',')}%`);
+  // Rótulo honesto do que está na tela: quando o período foi cortado em hoje, o
+  // nome do preset ("Ano de 2026") mentiria sobre o que foi somado.
+  const rotuloPeriodo = calc.cortado
+    ? `${mesAnoLabel(calc.r.start)} até ${formatDateBR(toISODate(calc.r.end))}`
+    : periodLabel(period);
+
+  const NOME_TIPO_CUSTO = { fixa: 'Fixa (todo mês)', variavel: 'Variável (eventual)', nao_classificada: 'Não classificada' };
+
+  function blocoResultado() {
+    const linhas = calc.meses.map((m) => ({
+      chave: m.key,
+      celulas: [m.label, formatCurrency(m.receitas), formatCurrency(m.despesas), formatCurrency(m.saldo), pct(m.margem)],
+      tom: m.saldo < 0 ? 'var(--negative)' : undefined,
+    }));
+    const saldoTotal = round2(calc.totalReceita - calc.totalDespesa);
+    const margemTotal = calc.totalReceita > 0 ? (saldoTotal / calc.totalReceita) * 100 : null;
+    return (
+      <>
+        <div className="lomuz-kpi-grid" style={{ marginBottom: 16 }}>
+          <StatCard title="Receita no período" value={formatCurrency(calc.totalReceita)} icon={ArrowUpCircle} tone="success" footer={rotuloPeriodo} />
+          <StatCard title="Despesa no período" value={formatCurrency(calc.totalDespesa)} icon={ArrowDownCircle} tone="danger" footer={rotuloPeriodo} />
+          <StatCard title="Resultado" value={formatCurrency(saldoTotal)} icon={Wallet} tone={saldoTotal >= 0 ? 'success' : 'danger'} footer={saldoTotal >= 0 ? 'sobrou no período' : 'faltou no período'} />
+          <StatCard title="Margem" value={pct(margemTotal)} icon={TrendingUp} tone={margemTotal != null && margemTotal >= 0 ? 'success' : 'danger'} footer="do que entrou, quanto sobrou" />
+        </div>
+        <RelatorioTabela
+          titulo="Resultado mês a mês"
+          desc="Receita e despesa realizadas em cada mês do período. Contratos recorrentes entram mês a mês, uma cobrança por mês ativo — é por isso que a soma aqui é maior que a soma dos valores de contrato."
+          colunas={[{ label: 'Mês' }, { label: 'Receita', align: 'right' }, { label: 'Despesa', align: 'right' }, { label: 'Resultado', align: 'right' }, { label: 'Margem', align: 'right' }]}
+          linhas={linhas}
+          rodape={['Total', formatCurrency(calc.totalReceita), formatCurrency(calc.totalDespesa), formatCurrency(saldoTotal), pct(margemTotal)]}
+          onBaixar={() => baixarCSV(`resultado-mes-a-mes_${sufixo}.csv`, calc.meses.map((m) => ({
+            'Mês': m.label, Receita: numeroCSV(m.receitas), Despesa: numeroCSV(m.despesas),
+            Resultado: numeroCSV(m.saldo), 'Margem %': m.margem == null ? '' : numeroCSV(m.margem),
+          })))}
+        />
+      </>
+    );
+  }
+
+  function blocoDespesas() {
+    const cat = calc.despCategoria;
+    const forn = calc.despFornecedor;
+    const custo = calc.despTipoCusto;
+    const fornVisiveis = verTudoFornecedor ? forn.rows : forn.rows.slice(0, LIMITE_LINHAS_RELATORIO);
+    return (
+      <>
+        <RelatorioTabela
+          titulo="Despesas por categoria"
+          desc="Para onde o dinheiro foi, agrupado pela categoria de cada lançamento."
+          colunas={[{ label: 'Categoria' }, { label: 'Lançamentos', align: 'right' }, { label: 'Total', align: 'right' }, { label: '% do total', align: 'right' }]}
+          linhas={cat.rows.map((row) => ({ chave: row.chave, celulas: [calc.nomeCategoria(row.chave), String(row.cobrancas), formatCurrency(row.valor), pct(row.pct)] }))}
+          rodape={['Total', String(cat.rows.reduce((s, x) => s + x.cobrancas, 0)), formatCurrency(cat.total), '100,0%']}
+          onBaixar={() => baixarCSV(`despesas-por-categoria_${sufixo}.csv`, cat.rows.map((row) => ({
+            Categoria: calc.nomeCategoria(row.chave), 'Lançamentos': row.cobrancas, Total: numeroCSV(row.valor), 'Percentual': numeroCSV(row.pct),
+          })))}
+        />
+
+        <RelatorioTabela
+          titulo="Despesas por fornecedor"
+          desc={`Quem mais recebeu no período.${forn.rows.length > fornVisiveis.length ? ` Mostrando os ${fornVisiveis.length} maiores de ${forn.rows.length} — o CSV traz todos.` : ''}`}
+          colunas={[{ label: 'Fornecedor' }, { label: 'Lançamentos', align: 'right' }, { label: 'Total', align: 'right' }, { label: '% do total', align: 'right' }]}
+          linhas={fornVisiveis.map((row) => ({ chave: row.chave, celulas: [calc.nomeFornecedor(row.chave), String(row.cobrancas), formatCurrency(row.valor), pct(row.pct)] }))}
+          rodape={['Total (todos)', String(forn.rows.reduce((s, x) => s + x.cobrancas, 0)), formatCurrency(forn.total), '100,0%']}
+          onBaixar={() => baixarCSV(`despesas-por-fornecedor_${sufixo}.csv`, forn.rows.map((row) => ({
+            Fornecedor: calc.nomeFornecedor(row.chave), 'Lançamentos': row.cobrancas, Total: numeroCSV(row.valor), 'Percentual': numeroCSV(row.pct),
+          })))}
+        />
+        {forn.rows.length > LIMITE_LINHAS_RELATORIO && (
+          <Button variant="secondary" onClick={() => setVerTudoFornecedor((v) => !v)} style={{ width: '100%', marginTop: -6, marginBottom: 18 }}>
+            {verTudoFornecedor ? 'Mostrar só os 30 maiores' : `Mostrar todos os ${forn.rows.length} fornecedores`}
+          </Button>
+        )}
+
+        <RelatorioTabela
+          titulo="Custo fixo x variável"
+          desc="Custo fixo é o que se repete todo mês e você não controla no curto prazo; variável é o que dá pra apertar."
+          colunas={[{ label: 'Tipo de custo' }, { label: 'Lançamentos', align: 'right' }, { label: 'Total', align: 'right' }, { label: '% do total', align: 'right' }]}
+          linhas={custo.rows.map((row) => ({ chave: row.chave, celulas: [NOME_TIPO_CUSTO[row.chave] || row.chave, String(row.cobrancas), formatCurrency(row.valor), pct(row.pct)] }))}
+          rodape={['Total', String(custo.rows.reduce((s, x) => s + x.cobrancas, 0)), formatCurrency(custo.total), '100,0%']}
+          onBaixar={() => baixarCSV(`custo-fixo-x-variavel_${sufixo}.csv`, custo.rows.map((row) => ({
+            'Tipo de custo': NOME_TIPO_CUSTO[row.chave] || row.chave, 'Lançamentos': row.cobrancas, Total: numeroCSV(row.valor), 'Percentual': numeroCSV(row.pct),
+          })))}
+        />
+      </>
+    );
+  }
+
+  function blocoReceita() {
+    const cat = calc.recCategoria;
+    const cli = calc.recCliente;
+    const cliVisiveis = verTudoCliente ? cli.rows : cli.rows.slice(0, LIMITE_LINHAS_RELATORIO);
+    const nomeCli = (chave) => (chave === '__sem__' ? 'Sem cliente informado' : chave);
+    return (
+      <>
+        <RelatorioTabela
+          titulo="Receita por produto"
+          desc="Cada categoria de receita, com o número de cobranças que ela gerou no período."
+          colunas={[{ label: 'Produto / categoria' }, { label: 'Cobranças', align: 'right' }, { label: 'Contratos', align: 'right' }, { label: 'Total', align: 'right' }, { label: '% do total', align: 'right' }]}
+          linhas={cat.rows.map((row) => ({ chave: row.chave, celulas: [calc.nomeCategoria(row.chave), String(row.cobrancas), String(row.lancamentos), formatCurrency(row.valor), pct(row.pct)] }))}
+          rodape={['Total', String(cat.rows.reduce((s, x) => s + x.cobrancas, 0)), String(cat.rows.reduce((s, x) => s + x.lancamentos, 0)), formatCurrency(cat.total), '100,0%']}
+          onBaixar={() => baixarCSV(`receita-por-produto_${sufixo}.csv`, cat.rows.map((row) => ({
+            Produto: calc.nomeCategoria(row.chave), 'Cobranças': row.cobrancas, Contratos: row.lancamentos, Total: numeroCSV(row.valor), 'Percentual': numeroCSV(row.pct),
+          })))}
+        />
+
+        <RelatorioTabela
+          titulo="Receita por cliente"
+          desc={`Quem mais faturou no período.${cli.rows.length > cliVisiveis.length ? ` Mostrando os ${cliVisiveis.length} maiores de ${cli.rows.length} — o CSV traz todos.` : ''}`}
+          colunas={[{ label: 'Cliente' }, { label: 'Cobranças', align: 'right' }, { label: 'Contratos', align: 'right' }, { label: 'Total', align: 'right' }, { label: '% do total', align: 'right' }]}
+          linhas={cliVisiveis.map((row) => ({ chave: row.chave, celulas: [nomeCli(row.chave), String(row.cobrancas), String(row.lancamentos), formatCurrency(row.valor), pct(row.pct)] }))}
+          rodape={['Total (todos)', String(cli.rows.reduce((s, x) => s + x.cobrancas, 0)), String(cli.rows.reduce((s, x) => s + x.lancamentos, 0)), formatCurrency(cli.total), '100,0%']}
+          onBaixar={() => baixarCSV(`receita-por-cliente_${sufixo}.csv`, cli.rows.map((row) => ({
+            Cliente: nomeCli(row.chave), 'Cobranças': row.cobrancas, Contratos: row.lancamentos, Total: numeroCSV(row.valor), 'Percentual': numeroCSV(row.pct),
+          })))}
+        />
+        {cli.rows.length > LIMITE_LINHAS_RELATORIO && (
+          <Button variant="secondary" onClick={() => setVerTudoCliente((v) => !v)} style={{ width: '100%', marginTop: -6, marginBottom: 18 }}>
+            {verTudoCliente ? 'Mostrar só os 30 maiores' : `Mostrar todos os ${cli.rows.length} clientes`}
+          </Button>
+        )}
+      </>
+    );
+  }
+
+  function blocoContratos() {
+    const mrrNovoTotal = round2(calc.novosNoPeriodo.reduce((s, t) => s + (t.frequencia === 'semanal' ? t.valor * (52 / 12) : t.frequencia === 'anual' ? t.valor / 12 : t.valor), 0));
+    const mrrPerdidoTotal = round2(calc.canceladosNoPeriodo.reduce((s, t) => s + (t.frequencia === 'semanal' ? t.valor * (52 / 12) : t.frequencia === 'anual' ? t.valor / 12 : t.valor), 0));
+    return (
+      <>
+        <div className="lomuz-kpi-grid" style={{ marginBottom: 16 }}>
+          <StatCard title="Receita recorrente por mês" value={formatCurrency(calc.mrr)} icon={Repeat} tone="success" footer={calc.ativos === 1 ? '1 contrato ativo hoje' : `${calc.ativos} contratos ativos hoje`} />
+          <StatCard title="Novos no período" value={String(calc.novosNoPeriodo.length)} icon={Plus} tone="neutral" footer={`${formatCurrency(mrrNovoTotal)} por mês somados`} />
+          <StatCard title="Cancelados no período" value={String(calc.canceladosNoPeriodo.length)} icon={X} tone={calc.canceladosNoPeriodo.length > 0 ? 'danger' : 'neutral'} footer={`${formatCurrency(mrrPerdidoTotal)} por mês perdidos`} />
+          <StatCard title="Taxa de cancelamento" value={pct(calc.taxaCancelamento)} icon={TrendingUp} tone={calc.taxaCancelamento != null && calc.taxaCancelamento > 10 ? 'danger' : 'neutral'} footer={calc.baseInicio.length === 1 ? 'sobre 1 contrato que já valia no início' : `sobre ${calc.baseInicio.length} contratos que já valiam no início`} />
+        </div>
+
+        <RelatorioTabela
+          titulo="Entradas e saídas de contrato, mês a mês"
+          desc="Contrato novo assinado e contrato cancelado em cada mês, com o efeito de cada um na receita mensal. Saldo positivo é base crescendo."
+          colunas={[{ label: 'Mês' }, { label: 'Novos', align: 'right' }, { label: 'Cancelados', align: 'right' }, { label: 'Saldo', align: 'right' }, { label: 'Efeito por mês', align: 'right' }]}
+          linhas={calc.contratosPorMes.map((m) => {
+            const saldo = m.novos - m.cancelados;
+            const efeito = round2(m.mrrNovo - m.mrrPerdido);
+            return {
+              chave: m.key,
+              celulas: [m.label, String(m.novos), String(m.cancelados), (saldo > 0 ? '+' : '') + String(saldo), (efeito > 0 ? '+' : '') + formatCurrency(efeito)],
+              tom: efeito < 0 ? 'var(--negative)' : undefined,
+            };
+          })}
+          rodape={[
+            'Total',
+            String(calc.contratosPorMes.reduce((s, m) => s + m.novos, 0)),
+            String(calc.contratosPorMes.reduce((s, m) => s + m.cancelados, 0)),
+            String(calc.contratosPorMes.reduce((s, m) => s + m.novos - m.cancelados, 0)),
+            (mrrNovoTotal - mrrPerdidoTotal > 0 ? '+' : '') + formatCurrency(round2(mrrNovoTotal - mrrPerdidoTotal)),
+          ]}
+          onBaixar={() => baixarCSV(`contratos-mes-a-mes_${sufixo}.csv`, calc.contratosPorMes.map((m) => ({
+            'Mês': m.label, Novos: m.novos, Cancelados: m.cancelados,
+            'Receita mensal ganha': numeroCSV(m.mrrNovo), 'Receita mensal perdida': numeroCSV(m.mrrPerdido),
+          })))}
+        />
+
+        <RelatorioTabela
+          titulo="Cancelamentos do período, contrato por contrato"
+          desc="Quem cancelou, quanto valia por mês e em que data — a lista pra ligar e tentar reverter."
+          colunas={[{ label: 'Cliente' }, { label: 'Contrato' }, { label: 'Cancelado em', align: 'right' }, { label: 'Valia por mês', align: 'right' }]}
+          linhas={[...calc.canceladosNoPeriodo]
+            .sort((a, b) => (b.dataCancelamento || '').localeCompare(a.dataCancelamento || ''))
+            .map((t) => ({ chave: t.id, celulas: [t.clienteNome || 'Sem cliente', t.descricao || calc.nomeCategoria(t.categoriaId), formatDateBR(t.dataCancelamento), formatCurrency(t.valor)] }))}
+          rodape={['Total', `${calc.canceladosNoPeriodo.length} contrato(s)`, '', formatCurrency(mrrPerdidoTotal)]}
+          vazioTexto="Nenhum contrato cancelado no período — boa notícia."
+          onBaixar={() => baixarCSV(`cancelamentos_${sufixo}.csv`, calc.canceladosNoPeriodo.map((t) => ({
+            Cliente: t.clienteNome || '', Contrato: t.descricao || calc.nomeCategoria(t.categoriaId),
+            'Cancelado em': formatDateBR(t.dataCancelamento), 'Valor mensal': numeroCSV(t.valor),
+          })))}
+        />
+      </>
+    );
+  }
+
+  return (
+    <div style={{ paddingTop: 12 }}>
+      <RelatoriosTabNav subTab={subTab} setSubTab={setSubTab} />
+
+      {/* Vencimentos fala do agora (o que está atrasado hoje), então o seletor
+          de período não aparece nessa aba — filtro que não filtra confunde. */}
+      {subTab !== 'vencimentos' && (
+        <Card style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 'var(--fs-micro)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)', marginBottom: 8 }}>Período do relatório</div>
+          {/* anoMax no ano corrente: relatório só fala do que já aconteceu, e
+              um ano futuro devolveria tabela vazia. Projeção pra frente é o
+              painel Início e a tela Previsão. */}
+          <PeriodSelector value={period} onChange={setPeriod} presets={PERIOD_PRESETS_RELATORIO} anoMax={new Date().getFullYear()} />
+          {calc.cortado && (
+            <div style={{ marginTop: 8, fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', lineHeight: 1.5 }}>
+              O relatório vai até hoje ({formatDateBR(toISODate(calc.r.end))}). Mês que ainda não aconteceu não entra na conta —
+              para ver o que está previsto pra frente, use a tela <strong>Previsão</strong>.
+            </div>
+          )}
+        </Card>
+      )}
+
+      {subTab === 'resultado' && blocoResultado()}
+      {subTab === 'despesas' && blocoDespesas()}
+      {subTab === 'receita' && blocoReceita()}
+      {subTab === 'contratos' && blocoContratos()}
+      {subTab === 'vencimentos' && (
+        <VencimentosPage data={data} onConfirmarRecebimento={onConfirmarRecebimento} onEditTransaction={onEditTransaction} />
+      )}
+    </div>
+  );
+}
+
+/* =========================================================================
    PÁGINA: AJUDA
    ========================================================================= */
 
@@ -4504,14 +5046,18 @@ const AJUDA_SECOES = [
     ],
   },
   {
-    key: 'vencimentos',
+    key: 'relatorios',
     icon: Clock,
-    titulo: 'Vencimentos',
+    titulo: 'Relatórios',
     todos: false,
     itens: [
-      ['Como o atraso é contado', 'Cada contrato recorrente vence todo mês no mesmo dia da data original dele. Se você não confirmar o recebimento depois desse dia, o sistema começa a contar os dias de atraso.'],
-      ['Atenção e Crítico', 'Até 10 dias de atraso o cliente aparece como Atenção (amarelo). Passando disso vira Crítico (vermelho), que é quando vale cobrar de verdade.'],
-      ['Confirmar recebimento', 'O botão de check ao lado de cada linha marca que aquele mês foi recebido. O sistema não conversa com o banco — essa confirmação é sua.'],
+      ['Período', 'Todo relatório começa pelo período no alto da tela: este mês, mês passado, últimos 3, últimos 12, este ano, ano passado ou datas escolhidas por você. Tudo abaixo recalcula na hora.'],
+      ['Resultado mês a mês', 'Quanto entrou, quanto saiu, quanto sobrou e a margem de cada mês. A margem é quanto sobrou de cada R$ 100 que entraram. Contrato recorrente entra uma vez por mês ativo, e é por isso que a soma aqui é maior que a soma dos valores de contrato.'],
+      ['Despesas', 'Três olhares sobre o mesmo gasto: por categoria (para onde foi), por fornecedor (quem recebeu) e custo fixo x variável (o que se repete todo mês contra o que dá pra apertar).'],
+      ['Receita', 'Por produto (o que mais vende) e por cliente (quem mais fatura). "Cobranças" é quantas vezes aquilo foi faturado no período; "contratos" é quantas vendas diferentes.'],
+      ['Contratos recorrentes', 'Sua receita que se repete: quanto entra por mês hoje, quantos contratos entraram e saíram no período, a taxa de cancelamento e a lista de quem cancelou — com quanto cada um valia por mês.'],
+      ['Vencimentos', 'Cada contrato recorrente vence todo mês no mesmo dia da data original dele. Sem confirmação de recebimento depois desse dia, o atraso começa a contar. Até 10 dias é Atenção (amarelo); acima disso é Crítico (vermelho). O botão de check marca o mês como recebido — o sistema não conversa com o banco, essa confirmação é sua.'],
+      ['Baixar CSV', 'Cada tabela tem um botão que baixa aquele relatório num arquivo que abre direto no Excel, com os acentos e os centavos certos. Quando a tela mostra só os 30 maiores, o arquivo traz todos.'],
     ],
   },
   {
@@ -4927,6 +5473,7 @@ export default function App() {
   const [currentVendedorId, setCurrentVendedorId] = useState(null);
   const [period, setPeriod] = useState({ type: 'mes_atual', start: '', end: '' });
   const [cadastroTab, setCadastroTab] = useState('categorias');
+  const [relatorioTab, setRelatorioTab] = useState('resultado');
 
   const [showAddTx, setShowAddTx] = useState(false);
   const [showImportCsv, setShowImportCsv] = useState(false);
@@ -4967,7 +5514,7 @@ export default function App() {
     else setData(null);
   }, [session]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { if (role === 'vendedor' && page === 'categorias') setPage('inicio'); }, [role]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (role === 'vendedor' && (page === 'categorias' || page === 'relatorios')) setPage('inicio'); }, [role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadData(s) {
     const userId = s.user.id;
@@ -5237,6 +5784,7 @@ export default function App() {
       comissaoPercentual: '',
       pago: true,
       dataVencimento: '',
+      despesaFixa: false,
     });
     setTxStep('form');
     setShowAddTx(true);
@@ -5330,6 +5878,7 @@ export default function App() {
       // na hora, não existe uma linha guardada por mês pra marcar como paga.
       pago: draft.recorrente ? true : (draft.pago !== false),
       dataVencimento: (!draft.recorrente && draft.pago === false) ? (draft.dataVencimento || null) : null,
+      despesaFixa: draft.tipo === 'despesa' ? draft.despesaFixa === true : null,
     };
     const list = editingTx ? data.transactions.map((t) => (t.id === tx.id ? tx : t)) : [...data.transactions, tx];
     persist({ ...data, transactions: list, fornecedores });
@@ -5437,7 +5986,7 @@ export default function App() {
     lancamentos: role === 'vendedor' ? 'Suas vendas' : 'Lançamentos',
     previsao: role === 'vendedor' ? 'Sua previsão' : 'Previsão',
     clientes: 'Clientes',
-    vencimentos: 'Vencimentos',
+    relatorios: 'Relatórios',
     categorias: 'Cadastros',
     config: 'Configurações',
     ajuda: 'Ajuda',
@@ -5453,7 +6002,7 @@ export default function App() {
       ? 'Sua projeção de vendas, metas e comissão.'
       : 'Projeção financeira e panorama da equipe de vendas.',
     clientes: 'Cadastro de clientes, com busca, filtros e aviso de reajuste de contrato.',
-    vencimentos: 'Relatório de vencimentos por cliente, com urgência por atraso.',
+    relatorios: 'Resultado, despesas, receita, contratos e vencimentos — cada um com opção de baixar em CSV.',
     categorias: 'Categorias, fornecedores, planos, serviços, ramos de negócio e índices de reajuste.',
     config: 'Aparência, usuários e mural de orientação.',
     ajuda: 'Como usar cada parte do sistema, explicado passo a passo.',
@@ -5497,9 +6046,9 @@ export default function App() {
         pageSubtitle={pageSubtitles[page]}
         alerts={alerts}
         onAlertClick={(a) => setPage(a.page || 'inicio')}
-        submenus={role !== 'vendedor' ? { categorias: CADASTROS_TABS } : {}}
-        activeSubKey={cadastroTab}
-        onSubSelect={setCadastroTab}
+        submenus={role !== 'vendedor' ? { categorias: CADASTROS_TABS, relatorios: RELATORIOS_TABS } : {}}
+        activeSubKey={{ categorias: cadastroTab, relatorios: relatorioTab }}
+        onSubSelect={(secao, subKey) => (secao === 'relatorios' ? setRelatorioTab(subKey) : setCadastroTab(subKey))}
       >
         {page === 'inicio' && (
           <Dashboard data={data} role={role} currentVendedorId={currentVendedorId} period={period} setPeriod={setPeriod} onAddClick={openAddTransaction} onGoTo={setPage} onActivateNow={activateNow} onCustomizeClick={() => setShowCustomize(true)} onReviewSale={openEditTransaction} onEditMural={() => setShowMural(true)} />
@@ -5513,8 +6062,14 @@ export default function App() {
         {page === 'clientes' && (
           <ClientesPage data={data} role={role} persist={persist} askConfirm={askConfirm} />
         )}
-        {page === 'vencimentos' && role !== 'vendedor' && (
-          <VencimentosPage data={data} onConfirmarRecebimento={confirmarRecebimento} onEditTransaction={openEditTransaction} />
+        {page === 'relatorios' && role !== 'vendedor' && (
+          <RelatoriosPage
+            data={data}
+            subTab={relatorioTab}
+            setSubTab={setRelatorioTab}
+            onConfirmarRecebimento={confirmarRecebimento}
+            onEditTransaction={openEditTransaction}
+          />
         )}
         {page === 'ajuda' && (
           <AjudaPage role={role} />
