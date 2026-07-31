@@ -146,6 +146,7 @@ function txToRow(tx, userId) {
     created_by: userId,
     status: tx.status || 'aprovado',
     cliente_nome: tx.clienteNome || null,
+    fornecedor_id: tx.fornecedorId || null,
     contrato_meses: tx.contratoMeses || null,
     forma_pagamento: tx.formaPagamento || null,
     plano_id: tx.planoId || null,
@@ -173,6 +174,7 @@ function rowToTx(row) {
     dataCancelamento: row.data_cancelamento,
     status: row.status || 'aprovado',
     clienteNome: row.cliente_nome || '',
+    fornecedorId: row.fornecedor_id || null,
     contratoMeses: row.contrato_meses,
     formaPagamento: row.forma_pagamento || '',
     planoId: row.plano_id || null,
@@ -217,6 +219,17 @@ function servicoToRow(s) {
 }
 function rowToServico(row) {
   return { id: row.id, nome: row.nome, tipoCobranca: row.tipo_cobranca || 'unitaria', ativo: row.ativo !== false };
+}
+
+// Fornecedores são "credores" no sentido largo: a base tem fornecedor de
+// verdade, banco, imposto e salário no mesmo campo, porque no sistema antigo o
+// credor da despesa era só um texto solto. A tabela dá cadastro a esse texto —
+// dá pra renomear sem perder histórico e somar quanto já foi pago a cada um.
+function fornecedorToRow(f) {
+  return { id: f.id, nome: f.nome, documento: f.documento || null, ativo: f.ativo !== false };
+}
+function rowToFornecedor(row) {
+  return { id: row.id, nome: row.nome, documento: row.documento || '', ativo: row.ativo !== false };
 }
 
 function ramoToRow(r) {
@@ -1031,6 +1044,13 @@ function TransactionRow({ tx, category, last, onClick }) {
         <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tx.descricao || category?.nome || 'Sem categoria'}</div>
         <div style={{ fontSize: 12, color: 'var(--ink-soft)', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <span>{formatDateBR(tx.data)}</span>
+          {/* Cliente na receita, fornecedor/credor na despesa: o nome já era
+              buscável na lista, mas não aparecia em lugar nenhum dela — a linha
+              mostrava só a descrição ("Energia Elétrica"), nunca o credor
+              ("Copel"). */}
+          {tx.clienteNome && (
+            <span title={tx.clienteNome} style={{ maxWidth: 190, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>· {tx.clienteNome}</span>
+          )}
           {tx.dataEstimada && <span title="Venda antiga importada sem data exata registrada — usamos uma data aproximada." style={{ color: 'var(--warning-strong)', fontWeight: 700 }}>· data aproximada</span>}
           {tx.recorrente && <Repeat size={11} />}
           {status === 'pendente' && <span style={{ color: 'var(--warning-strong)', fontWeight: 700 }}>· Pendente</span>}
@@ -1488,7 +1508,7 @@ function MuralAdminModal({ orientacoes, persistOrientacoes, askConfirm }) {
    FORMULÁRIO DE LANÇAMENTO + FLUXO DE RECORRÊNCIA
    ========================================================================= */
 
-function TransactionForm({ draft, categories, role, vendedores, planos, onSubmit, onCancel, onDelete, onCancelRecurrence, onApprove, onReject }) {
+function TransactionForm({ draft, categories, role, vendedores, planos, fornecedores, onSubmit, onCancel, onDelete, onCancelRecurrence, onApprove, onReject }) {
   const [local, setLocal] = useState(draft);
   const [error, setError] = useState('');
   const cats = categories.filter((c) => c.tipo === local.tipo);
@@ -1572,6 +1592,26 @@ function TransactionForm({ draft, categories, role, vendedores, planos, onSubmit
           {cats.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
         </select>
       </Field>
+
+      {/* Despesa: quem recebe o pagamento. Até aqui o formulário não tinha esse
+          campo — as 3.420 despesas importadas do sistema antigo trouxeram o
+          credor, mas uma despesa nova nascia sem ele. O datalist deixa
+          escolher entre os já cadastrados sem virar um select de 180 linhas. */}
+      {!isVenda && (
+        <Field label="Fornecedor / credor (opcional)" hint="Nome que ainda não existe no cadastro é criado automaticamente ao salvar.">
+          <input
+            type="text"
+            list="lomuz-fornecedores"
+            value={local.clienteNome || ''}
+            onChange={(e) => set('clienteNome', e.target.value)}
+            placeholder="Ex.: Posto Sul Paraná"
+            style={inputStyle}
+          />
+          <datalist id="lomuz-fornecedores">
+            {(fornecedores || []).filter((f) => f.ativo !== false).map((f) => <option key={f.id} value={f.nome} />)}
+          </datalist>
+        </Field>
+      )}
 
       {isVenda && (
         <>
@@ -3233,6 +3273,7 @@ function PlanoForm({ plano, categories, servicos, onSubmit, onCancel }) {
 
 const CADASTROS_TABS = [
   { key: 'categorias', label: 'Categorias' },
+  { key: 'fornecedores', label: 'Fornecedores' },
   { key: 'planos', label: 'Planos negociados' },
   { key: 'servicos', label: 'Serviços' },
   { key: 'ramos', label: 'Ramos de negócio' },
@@ -3420,6 +3461,234 @@ function IndiceForm({ item, onSubmit, onCancel }) {
   );
 }
 
+/* -------------------------------------------------------------------------
+   CADASTRO: FORNECEDORES / CREDORES
+   Aba própria (e não a CadastroSimplesTab genérica) porque são 180 registros
+   com histórico de pagamento atrás: sem busca, ordenação por valor e paginação
+   viraria uma parede de nomes, e o dado mais útil — quanto já foi pago a cada
+   um — não caberia numa lista simples de nome.
+   ------------------------------------------------------------------------- */
+
+const FORNECEDORES_POR_PAGINA = 40;
+
+function FornecedorForm({ item, resumo, onSubmit, onCancel, onDelete }) {
+  const [nome, setNome] = useState(item?.nome || '');
+  const [documento, setDocumento] = useState(item?.documento || '');
+  const [ativo, setAtivo] = useState(item?.ativo !== false);
+  const [error, setError] = useState('');
+
+  function submit() {
+    if (!nome.trim()) { setError('Informe o nome do fornecedor.'); return; }
+    onSubmit({ id: item?.id || uid(), nome: nome.trim(), documento: documento.trim(), ativo });
+  }
+
+  const temHistorico = (resumo?.lancamentos || 0) > 0;
+
+  return (
+    <div>
+      {temHistorico && (
+        <div style={{ background: 'var(--surface-2)', borderRadius: 12, padding: 12, marginBottom: 14, fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', lineHeight: 1.6 }}>
+          <strong style={{ color: 'var(--ink)' }}>{resumo.lancamentos} despesa(s)</strong> já lançada(s) para este fornecedor, somando <strong style={{ color: 'var(--ink)' }}>{formatCurrency(resumo.total)}</strong>
+          {resumo.ultimo ? ` — a última em ${formatDateBR(resumo.ultimo)}.` : '.'}
+          {resumo.aberto > 0 && <> Ainda em aberto: <strong style={{ color: 'var(--warning-strong)' }}>{formatCurrency(resumo.aberto)}</strong>.</>}
+        </div>
+      )}
+
+      <Field label="Nome do fornecedor" hint="Renomear aqui muda o nome em todos os lançamentos deste fornecedor.">
+        <input type="text" style={inputStyle} value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex.: Posto Sul Paraná" />
+      </Field>
+      <Field label="CNPJ / CPF (opcional)">
+        <input type="text" style={inputStyle} value={documento} onChange={(e) => setDocumento(e.target.value)} placeholder="Só números ou com pontuação" />
+      </Field>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderTop: '1px solid var(--border)' }}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>Fornecedor ativo</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>Desligue pra tirar da lista de novas despesas sem apagar o histórico</div>
+        </div>
+        <Toggle checked={ativo} onChange={setAtivo} />
+      </div>
+
+      {error && <div style={{ color: 'var(--negative)', fontSize: 'var(--fs-body)', marginBottom: 10, fontWeight: 600 }}>{error}</div>}
+      <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+        <Button variant="secondary" onClick={onCancel} style={{ flex: 1 }}>Cancelar</Button>
+        <Button variant="primary" onClick={submit} style={{ flex: 2 }}>Salvar fornecedor</Button>
+      </div>
+
+      {/* Fornecedor com despesa lançada não se apaga: o histórico financeiro
+          precisa continuar somando por credor. O caminho é desativar. */}
+      {onDelete && (
+        temHistorico ? (
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', lineHeight: 1.6 }}>
+            Não é possível excluir um fornecedor que já tem despesa lançada — isso apagaria o vínculo do histórico. Use o botão <strong>Fornecedor ativo</strong> acima para aposentá-lo.
+          </div>
+        ) : (
+          <Button variant="secondary" onClick={onDelete} style={{ width: '100%', marginTop: 12, color: 'var(--negative)' }}>
+            <Trash2 size={15} /> Excluir fornecedor
+          </Button>
+        )
+      )}
+    </div>
+  );
+}
+
+function FornecedoresTab({ subTab, setSubTab, fornecedores, transactions, onSave, onRemove }) {
+  const [busca, setBusca] = useState('');
+  const [filterAtivo, setFilterAtivo] = useState('ativos');
+  const [ordem, setOrdem] = useState('gasto');
+  const [limite, setLimite] = useState(FORNECEDORES_POR_PAGINA);
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+
+  // Quanto já foi pago a cada fornecedor. As despesas são todas lançamento
+  // avulso (uma linha por parcela), então dá pra somar `valor` direto — não
+  // precisa expandir recorrência como nas receitas.
+  const resumos = useMemo(() => {
+    const map = new Map();
+    transactions.forEach((t) => {
+      if (t.tipo !== 'despesa' || !t.fornecedorId || t.status !== 'aprovado') return;
+      const r = map.get(t.fornecedorId) || { lancamentos: 0, total: 0, aberto: 0, ultimo: null };
+      r.lancamentos += 1;
+      r.total += t.valor || 0;
+      if (t.pago === false) r.aberto += t.valor || 0;
+      if (!r.ultimo || t.data > r.ultimo) r.ultimo = t.data;
+      map.set(t.fornecedorId, r);
+    });
+    return map;
+  }, [transactions]);
+
+  const vazio = { lancamentos: 0, total: 0, aberto: 0, ultimo: null };
+  const termo = busca.trim().toLowerCase();
+  const termoDigitos = soDigitos(busca);
+
+  let list = fornecedores.filter((f) => {
+    if (filterAtivo === 'ativos' && f.ativo === false) return false;
+    if (filterAtivo === 'inativos' && f.ativo !== false) return false;
+    if (termo) {
+      const porDocumento = termoDigitos.length >= 3 && soDigitos(f.documento).includes(termoDigitos);
+      if (!(f.nome || '').toLowerCase().includes(termo) && !porDocumento) return false;
+    }
+    return true;
+  });
+  list = [...list].sort((a, b) => {
+    const ra = resumos.get(a.id) || vazio;
+    const rb = resumos.get(b.id) || vazio;
+    if (ordem === 'gasto') return rb.total - ra.total || (a.nome || '').localeCompare(b.nome || '');
+    if (ordem === 'aberto') return rb.aberto - ra.aberto || rb.total - ra.total;
+    if (ordem === 'recente') return (rb.ultimo || '').localeCompare(ra.ultimo || '');
+    return (a.nome || '').localeCompare(b.nome || '');
+  });
+  const visiveis = list.slice(0, limite);
+
+  const totalConsiderado = fornecedores.filter((f) => (filterAtivo === 'ativos' ? f.ativo !== false : filterAtivo === 'inativos' ? f.ativo === false : true)).length;
+  const filtrando = list.length !== totalConsiderado;
+  const somaFiltro = list.reduce((s, f) => s + (resumos.get(f.id)?.total || 0), 0);
+  const abertoFiltro = list.reduce((s, f) => s + (resumos.get(f.id)?.aberto || 0), 0);
+
+  useEffect(() => { setLimite(FORNECEDORES_POR_PAGINA); }, [busca, filterAtivo, ordem]);
+
+  function abrirNovo() { setEditing(null); setShowForm(true); }
+  function salvar(item) { onSave(item, editing); setShowForm(false); setEditing(null); }
+  function excluir(id) { onRemove(id); setShowForm(false); setEditing(null); }
+
+  return (
+    <div style={{ paddingTop: 12 }}>
+      <CadastrosTabNav subTab={subTab} setSubTab={setSubTab} />
+      <PageToolbar
+        desc="Quem a empresa paga: fornecedor, banco, imposto, salário. Cada despesa aponta para um fornecedor, e é isso que permite ver quanto já foi pago a cada um."
+        actionLabel="Novo fornecedor"
+        onAction={abrirNovo}
+      />
+
+      <SearchInput value={busca} onChange={setBusca} placeholder="Buscar fornecedor pelo nome ou CNPJ…" />
+
+      <FilterGroup label="Situação">
+        <Chip active={filterAtivo === 'ativos'} onClick={() => setFilterAtivo('ativos')}>Ativos</Chip>
+        <Chip active={filterAtivo === 'inativos'} onClick={() => setFilterAtivo('inativos')}>Inativos</Chip>
+        <Chip active={filterAtivo === 'todos'} onClick={() => setFilterAtivo('todos')}>Todos</Chip>
+      </FilterGroup>
+
+      <FilterGroup label="Ordenar por">
+        <Chip active={ordem === 'gasto'} onClick={() => setOrdem('gasto')}>Maior gasto</Chip>
+        <Chip active={ordem === 'aberto'} onClick={() => setOrdem('aberto')}>Maior valor em aberto</Chip>
+        <Chip active={ordem === 'recente'} onClick={() => setOrdem('recente')}>Pagamento mais recente</Chip>
+        <Chip active={ordem === 'nome'} onClick={() => setOrdem('nome')}>Nome</Chip>
+      </FilterGroup>
+
+      <div style={{ margin: '4px 2px 10px', fontSize: 'var(--fs-small)', color: 'var(--ink-soft)' }}>
+        {filtrando ? `${list.length} de ${totalConsiderado} fornecedor(es)` : `${list.length} fornecedor(es)`}
+        {somaFiltro > 0 ? ` · ${formatCurrency(somaFiltro)} pagos` : ''}
+        {abertoFiltro > 0 ? ` · ${formatCurrency(abertoFiltro)} em aberto` : ''}
+        {list.length > visiveis.length ? ` · mostrando os ${visiveis.length} primeiros` : ''}
+      </div>
+
+      {list.length === 0 ? (
+        <EmptyState
+          icon={Briefcase}
+          title={termo ? 'Nenhum fornecedor encontrado' : 'Nenhum fornecedor cadastrado'}
+          desc={termo ? `Nada com "${busca}". Ajuste a busca ou cadastre um novo.` : 'Cadastre quem a empresa paga para acompanhar o gasto por fornecedor.'}
+          actionLabel="+ Novo fornecedor"
+          onAction={abrirNovo}
+        />
+      ) : (
+        <Card style={{ padding: 0 }}>
+          {visiveis.map((f, i) => {
+            const r = resumos.get(f.id) || vazio;
+            const linha2 = [
+              f.documento,
+              r.lancamentos > 0 ? `${r.lancamentos} lançamento(s)` : 'sem lançamento ainda',
+              r.ultimo ? `último em ${formatDateBR(r.ultimo)}` : null,
+            ].filter(Boolean).join(' · ');
+            return (
+              <div
+                key={f.id}
+                onClick={() => { setEditing(f); setShowForm(true); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', borderBottom: i === visiveis.length - 1 ? 'none' : '1px solid var(--border)', cursor: 'pointer' }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.nome}</span>
+                    {f.ativo === false && <span style={{ fontSize: 'var(--fs-micro)', fontWeight: 700, color: 'var(--ink-soft)', background: 'var(--surface-2)', borderRadius: 999, padding: '2px 8px', flexShrink: 0 }}>Inativo</span>}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{linha2}</div>
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{formatCurrency(r.total)}</div>
+                  {r.aberto > 0 && <div style={{ fontSize: 'var(--fs-small)', fontWeight: 700, color: 'var(--warning-strong)' }}>{formatCurrency(r.aberto)} a pagar</div>}
+                </div>
+              </div>
+            );
+          })}
+        </Card>
+      )}
+
+      {list.length > visiveis.length && (
+        <Button variant="secondary" onClick={() => setLimite((n) => n + FORNECEDORES_POR_PAGINA)} style={{ width: '100%', marginTop: 12 }}>
+          Mostrar mais {Math.min(FORNECEDORES_POR_PAGINA, list.length - visiveis.length)} de {list.length - visiveis.length} restantes
+        </Button>
+      )}
+
+      {list.length > 0 && (
+        <Button variant="primary" onClick={abrirNovo} style={{ width: '100%', marginTop: 16 }}>
+          <Plus size={16} /> Novo fornecedor
+        </Button>
+      )}
+
+      {showForm && (
+        <Modal title={editing ? 'Editar fornecedor' : 'Novo fornecedor'} onClose={() => { setShowForm(false); setEditing(null); }}>
+          <FornecedorForm
+            item={editing}
+            resumo={editing ? (resumos.get(editing.id) || vazio) : vazio}
+            onSubmit={salvar}
+            onCancel={() => { setShowForm(false); setEditing(null); }}
+            onDelete={editing ? () => excluir(editing.id) : null}
+          />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // subTab vem de fora porque o menu do cabeçalho abre um cadastro específico
 // direto, sem passar pela primeira aba.
 function CategoriasPage({ data, persist, askConfirm, subTab, setSubTab }) {
@@ -3519,6 +3788,18 @@ function CategoriasPage({ data, persist, askConfirm, subTab, setSubTab }) {
           </Modal>
         )}
       </div>
+    );
+  }
+
+  if (subTab === 'fornecedores') {
+    return (
+      <FornecedoresTab
+        subTab={subTab} setSubTab={setSubTab}
+        fornecedores={data.fornecedores || []}
+        transactions={data.transactions}
+        onSave={(item, editingItem) => saveSimples('fornecedores', item, editingItem)}
+        onRemove={(id) => removeSimples('fornecedores', id, 'Excluir este fornecedor? Ele não tem nenhuma despesa lançada.')}
+      />
     );
   }
 
@@ -4240,6 +4521,7 @@ const AJUDA_SECOES = [
     todos: false,
     itens: [
       ['Categorias', 'Os grupos que organizam receitas e despesas nos relatórios (ex.: Rádio do Cliente, Aluguel, Folha de pagamento).'],
+      ['Fornecedores', 'Quem a empresa paga — fornecedor, banco, imposto, salário. A lista mostra quanto já foi pago a cada um e quanto ainda está em aberto. Ao lançar uma despesa, digite o nome no campo Fornecedor: se ainda não existir, o cadastro é criado sozinho. Fornecedor com despesa lançada não pode ser excluído (isso apagaria o vínculo do histórico) — desative-o no lugar disso.'],
       ['Planos negociados', 'Combinações prontas de preço e comissão. Quando o vendedor escolhe um plano na venda, o valor e a comissão vêm preenchidos.'],
       ['Serviços', 'O que a empresa vende de fato. Todo plano aponta para um serviço.'],
       ['Ramos de negócio', 'Classificação do cliente (supermercado, farmácia, construção...), usada nos filtros de Clientes.'],
@@ -4693,7 +4975,7 @@ export default function App() {
       const [
         profileRes, catRes, vendRes, txRes, planoRes, orientRes, metaEqRes,
         servRes, ramoRes, indiceRes, clienteRes, clientePlanoRes,
-        rankVendRes, rankTxRes,
+        rankVendRes, rankTxRes, fornecedorRes,
       ] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', userId).single(),
         supabase.from('categories').select('*').order('nome'),
@@ -4711,6 +4993,7 @@ export default function App() {
         // comissão e vendas só de quem está ativo — nunca dados de admin).
         supabase.from('vendedores_publico').select('*'),
         supabase.from('transacoes_ranking_publico').select('*'),
+        supabase.from('fornecedores').select('*').order('nome'),
       ]);
       const metasEquipe = {};
       (metaEqRes.data || []).forEach((r) => { metasEquipe[r.mes] = Number(r.valor) || 0; });
@@ -4730,6 +5013,7 @@ export default function App() {
         indicesReajuste: (indiceRes.data || []).map(rowToIndice),
         clientes: (clienteRes.data || []).map(rowToCliente),
         clientePlanos: (clientePlanoRes.data || []).map(rowToClientePlano),
+        fornecedores: (fornecedorRes.data || []).map(rowToFornecedor),
         rankingPublico: {
           vendedores: (rankVendRes.data || []).map((row) => ({ id: row.id, nome: row.nome, comissaoPercentual: Number(row.comissao_percentual) || 0 })),
           transacoes: (rankTxRes.data || []).map(rowToTx),
@@ -4811,6 +5095,18 @@ export default function App() {
       }
       for (const s of prevServ) {
         if (!newServ.find((x) => x.id === s.id)) await supabase.from('servicos').delete().eq('id', s.id);
+      }
+
+      // fornecedores / credores
+      const prevForn = prev?.fornecedores || [];
+      const newForn = newData.fornecedores || [];
+      for (const f of newForn) {
+        const before = prevForn.find((x) => x.id === f.id);
+        if (!before) await supabase.from('fornecedores').insert(fornecedorToRow(f));
+        else if (JSON.stringify(before) !== JSON.stringify(f)) await supabase.from('fornecedores').update(fornecedorToRow(f)).eq('id', f.id);
+      }
+      for (const f of prevForn) {
+        if (!newForn.find((x) => x.id === f.id)) await supabase.from('fornecedores').delete().eq('id', f.id);
       }
 
       // ramos de negócio
@@ -4988,6 +5284,24 @@ export default function App() {
     closeTxModal();
   }
   function commitTransaction(draft, activation) {
+    // Em despesa, o texto do campo fornecedor vira vínculo com o cadastro:
+    // nome que já existe é reaproveitado (sem duplicar), nome novo é cadastrado
+    // na hora — assim o admin não precisa sair do lançamento pra criar o
+    // fornecedor antes. O id sai resolvido daqui e não do draft, então uma
+    // despesa que aponte pra fornecedor já removido se corrige ao ser salva.
+    const nomeCredor = draft.tipo === 'despesa' ? (draft.clienteNome || '').trim() : '';
+    let fornecedores = data.fornecedores || [];
+    let fornecedorId = null;
+    if (nomeCredor) {
+      const jaExiste = fornecedores.find((f) => (f.nome || '').trim().toLowerCase() === nomeCredor.toLowerCase());
+      if (jaExiste) {
+        fornecedorId = jaExiste.id;
+      } else {
+        const novo = { id: uid(), nome: nomeCredor, documento: '', ativo: true };
+        fornecedores = [...fornecedores, novo];
+        fornecedorId = novo.id;
+      }
+    }
     const tx = {
       id: editingTx?.id || uid(),
       tipo: draft.tipo,
@@ -5005,6 +5319,7 @@ export default function App() {
       dataCancelamento: editingTx?.dataCancelamento || null,
       status: draft.status || editingTx?.status || 'aprovado',
       clienteNome: draft.clienteNome || '',
+      fornecedorId,
       contratoMeses: draft.contratoMeses ? (parseInt(draft.contratoMeses, 10) || null) : null,
       formaPagamento: draft.formaPagamento || '',
       planoId: draft.planoId || null,
@@ -5017,7 +5332,7 @@ export default function App() {
       dataVencimento: (!draft.recorrente && draft.pago === false) ? (draft.dataVencimento || null) : null,
     };
     const list = editingTx ? data.transactions.map((t) => (t.id === tx.id ? tx : t)) : [...data.transactions, tx];
-    persist({ ...data, transactions: list });
+    persist({ ...data, transactions: list, fornecedores });
   }
   function approveTransaction(draft) {
     commitTransaction({ ...draft, status: 'aprovado' }, { mode: draft.ativacao || 'imediata', dias: draft.diasTeste || 7 });
@@ -5139,7 +5454,7 @@ export default function App() {
       : 'Projeção financeira e panorama da equipe de vendas.',
     clientes: 'Cadastro de clientes, com busca, filtros e aviso de reajuste de contrato.',
     vencimentos: 'Relatório de vencimentos por cliente, com urgência por atraso.',
-    categorias: 'Categorias, planos, serviços, ramos de negócio e índices de reajuste.',
+    categorias: 'Categorias, fornecedores, planos, serviços, ramos de negócio e índices de reajuste.',
     config: 'Aparência, usuários e mural de orientação.',
     ajuda: 'Como usar cada parte do sistema, explicado passo a passo.',
   };
@@ -5263,6 +5578,7 @@ export default function App() {
                 role={role}
                 vendedores={data.vendedores}
                 planos={data.planos}
+                fornecedores={data.fornecedores}
                 onSubmit={handleFormSubmit}
                 onCancel={closeTxModal}
                 onDelete={editingTx ? () => requestDeleteTransaction(editingTx) : null}

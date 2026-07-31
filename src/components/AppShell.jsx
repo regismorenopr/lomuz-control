@@ -24,9 +24,9 @@ export function navItemsFor(role) {
   ];
   if (role !== 'vendedor') {
     base.push({ key: 'vencimentos', label: 'Vencimentos', icon: Clock });
-    // "Cadastros" e não "Categorias": a página abriga 5 cadastros diferentes
-    // (categorias, planos, serviços, ramos, índices), e o nome antigo
-    // descrevia só o primeiro deles.
+    // "Cadastros" e não "Categorias": a página abriga 6 cadastros diferentes
+    // (categorias, fornecedores, planos, serviços, ramos, índices), e o nome
+    // antigo descrevia só o primeiro deles.
     base.push({ key: 'categorias', label: 'Cadastros', icon: Tag });
   }
   base.push({ key: 'config', label: 'Configurações', icon: Settings });
