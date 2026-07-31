@@ -2184,7 +2184,9 @@ function CategoryForm({ cat, onSubmit, onCancel }) {
 function VendedorForm({ vendedor, onSubmit, onCancel }) {
   const [nome, setNome] = useState(vendedor?.nome || '');
   const [email, setEmail] = useState(vendedor?.conviteEmail || '');
-  const [comissao, setComissao] = useState(vendedor?.comissaoPercentual ?? 5);
+  // 20% é o padrão da empresa pra vendedor novo — continua editável campo a
+  // campo, é só o valor de partida.
+  const [comissao, setComissao] = useState(vendedor?.comissaoPercentual ?? 20);
   const [meta, setMeta] = useState(vendedor?.metaPadrao ?? 10000);
   const [ativo, setAtivo] = useState(vendedor?.ativo !== false);
   const [error, setError] = useState('');
