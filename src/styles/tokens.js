@@ -176,6 +176,22 @@ export const GLOBAL_CSS = `
   .lomuz-user-text { display:none !important; }
 }
 
+/* Botão rápido de lançamento, fixo no rodapé em toda página. Só aparece no
+   desktop: no celular quem faz esse papel é o botão central da barra inferior,
+   e dois botões flutuantes disputariam o mesmo canto. */
+.lomuz-fab {
+  position:fixed; right:24px; bottom:24px; z-index:45;
+  display:flex; align-items:center; gap:8px;
+  padding:14px 20px; border:none; border-radius:var(--radius-pill);
+  background:var(--gradient-brand); color:#fff; cursor:pointer;
+  font-size:var(--fs-body); font-weight:700; white-space:nowrap;
+  box-shadow:0 10px 24px rgba(109,40,217,0.38);
+  transition:transform .15s, box-shadow .15s;
+}
+.lomuz-fab:hover { transform:translateY(-2px); box-shadow:0 14px 30px rgba(109,40,217,0.46); }
+.lomuz-fab:focus-visible { outline:3px solid var(--primary-text); outline-offset:3px; }
+@media (max-width: 900px) { .lomuz-fab { display:none; } }
+
 /* Área de conteúdo do layout desktop: usa a largura disponível, com um teto
    confortável para leitura de tabelas e gráficos. */
 .lomuz-content { width:100%; max-width:1440px; margin:0 auto; padding:24px 28px 40px; }

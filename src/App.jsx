@@ -4346,6 +4346,57 @@ const CLIENTES_POR_PAGINA = 60;
 // com ou sem ponto e barra.
 function soDigitos(v) { return (v || '').replace(/\D/g, ''); }
 
+// O que falta num cadastro de cliente pra ele funcionar de verdade. Não é "todo
+// campo vazio é problema": a ordem abaixo é a de quem dói primeiro, e cada item
+// diz o que deixa de funcionar sem ele — foi a importação do sistema antigo que
+// deixou esses buracos, e é isso que precisa ser fechado à mão.
+const FALTAS_CLIENTE = [
+  {
+    key: 'contato',
+    label: 'contato',
+    titulo: 'Sem telefone nem e-mail',
+    porque: 'sem um contato não dá pra cobrar nem avisar o cliente do reajuste',
+    falta: (c) => !(c.contatoTelefone || '').trim() && !(c.contatoEmail || '').trim(),
+  },
+  {
+    key: 'documento',
+    label: 'CNPJ/CPF',
+    titulo: 'Sem CNPJ ou CPF',
+    porque: 'é o que diferencia duas lojas de mesmo nome e o que a nota fiscal exige',
+    falta: (c) => !soDigitos(c.documento),
+  },
+  {
+    key: 'ramo',
+    label: 'ramo de atividade',
+    titulo: 'Sem ramo de atividade',
+    porque: 'o filtro por ramo e a análise por segmento ignoram esses clientes',
+    falta: (c) => !c.ramoNegocioId,
+  },
+  {
+    key: 'cidade',
+    label: 'cidade',
+    titulo: 'Sem cidade',
+    porque: 'sem cidade não dá pra ver onde a carteira está concentrada',
+    falta: (c) => !(c.cidade || '').trim(),
+  },
+  {
+    key: 'reajuste',
+    label: 'data de reajuste',
+    titulo: 'Sem data de reajuste',
+    porque: 'o aviso anual de reajuste nunca dispara para esses clientes',
+    falta: (c) => !c.proximoReajuste,
+  },
+  {
+    key: 'razao',
+    label: 'razão social',
+    titulo: 'Sem razão social',
+    porque: 'é o nome que vai no contrato e na nota, diferente do nome fantasia',
+    falta: (c) => !(c.razaoSocial || '').trim(),
+  },
+];
+
+function faltasDoCliente(c) { return FALTAS_CLIENTE.filter((f) => f.falta(c)); }
+
 function ClientesPage({ data, role, persist, askConfirm }) {
   const [busca, setBusca] = useState('');
   const [filterRamo, setFilterRamo] = useState('todos');
@@ -4356,11 +4407,24 @@ function ClientesPage({ data, role, persist, askConfirm }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [gerenciandoReajuste, setGerenciandoReajuste] = useState(null);
+  const [filterFalta, setFilterFalta] = useState('todos');
 
   const clientes = data.clientes || [];
   const ramosNegocio = data.ramosNegocio || [];
   const indicesReajuste = data.indicesReajuste || [];
   const categoriasReceita = data.categories.filter((c) => c.tipo === 'receita');
+
+  // Mapa de faltas por cliente, calculado uma vez: alimenta o aviso do topo, os
+  // filtros e a linha de cada cliente.
+  const faltasPorCliente = useMemo(() => {
+    const m = new Map();
+    clientes.forEach((c) => { const f = faltasDoCliente(c); if (f.length) m.set(c.id, f); });
+    return m;
+  }, [clientes]);
+  const resumoFaltas = FALTAS_CLIENTE
+    .map((f) => ({ ...f, quantos: clientes.filter((c) => f.falta(c)).length }))
+    .filter((f) => f.quantos > 0);
+  const totalIncompletos = faltasPorCliente.size;
 
   // Quais categorias/produtos cada cliente já comprou — cruzado pelo nome
   // (não existe vínculo por id entre venda e cadastro de cliente ainda).
@@ -4386,6 +4450,11 @@ function ClientesPage({ data, role, persist, askConfirm }) {
       const produtos = produtosPorCliente.get((c.nomeFantasia || '').trim().toLowerCase());
       if (!produtos || !produtos.has(filterProduto)) return false;
     }
+    if (filterFalta === 'incompletos' && !faltasPorCliente.has(c.id)) return false;
+    if (filterFalta !== 'todos' && filterFalta !== 'incompletos') {
+      const f = FALTAS_CLIENTE.find((x) => x.key === filterFalta);
+      if (f && !f.falta(c)) return false;
+    }
     if (termo) {
       // Se o que foi digitado tem 3+ dígitos, também vale como busca de
       // CNPJ/CPF — senão "10" acharia todo cliente com 10 no endereço.
@@ -4404,7 +4473,7 @@ function ClientesPage({ data, role, persist, askConfirm }) {
 
   // Mexeu na busca ou num filtro, a lista volta pro começo — senão a pessoa
   // filtra e continua vendo "mostrar mais" de um resultado que já cabe todo.
-  useEffect(() => { setLimite(CLIENTES_POR_PAGINA); }, [busca, filterRamo, filterProduto, filterAtivo, filterEstado]);
+  useEffect(() => { setLimite(CLIENTES_POR_PAGINA); }, [busca, filterRamo, filterProduto, filterAtivo, filterEstado, filterFalta]);
 
   function save(cliente) {
     const list2 = editing ? clientes.map((c) => (c.id === cliente.id ? cliente : c)) : [...clientes, cliente];
@@ -4463,6 +4532,60 @@ function ClientesPage({ data, role, persist, askConfirm }) {
         </Card>
       )}
 
+      {/* Cadastro incompleto: a importação do sistema antigo não trouxe contato,
+          ramo, cidade nem data de reajuste de todo mundo. Cada linha aqui é um
+          buraco e um clique que já filtra a lista pra fechar aquele buraco —
+          sem isso o admin teria que abrir 869 cadastros pra descobrir o que
+          falta. É função permanente, não mutirão de importação: cliente novo
+          cadastrado sem contato cai aqui do mesmo jeito. */}
+      {role === 'admin' && totalIncompletos > 0 && (
+        <Card style={{ marginBottom: 14, borderColor: 'var(--warning)' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800, fontSize: 'var(--fs-title)' }}>
+                <FileText size={17} style={{ color: 'var(--warning-strong)', flexShrink: 0 }} />
+                {totalIncompletos} de {clientes.length} cadastros incompletos
+              </div>
+              <div style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', marginTop: 3, lineHeight: 1.5 }}>
+                Clique em um item para ver só os clientes que precisam daquele ajuste. Abrir o cliente já leva ao formulário.
+              </div>
+            </div>
+            {filterFalta !== 'todos' && (
+              <Button variant="secondary" onClick={() => setFilterFalta('todos')} style={{ flexShrink: 0 }}>Limpar filtro</Button>
+            )}
+          </div>
+
+          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {resumoFaltas.map((f) => {
+              const ativo = filterFalta === f.key;
+              return (
+                <button
+                  key={f.key}
+                  onClick={() => setFilterFalta(ativo ? 'todos' : f.key)}
+                  aria-pressed={ativo}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+                    padding: '10px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+                    border: ativo ? '1px solid var(--warning)' : '1px solid transparent',
+                    background: ativo ? 'var(--warning-light)' : 'transparent',
+                    color: 'var(--ink)',
+                  }}
+                  onMouseEnter={(e) => { if (!ativo) e.currentTarget.style.background = 'var(--surface-2)'; }}
+                  onMouseLeave={(e) => { if (!ativo) e.currentTarget.style.background = 'transparent'; }}
+                >
+                  <span style={{ minWidth: 54, fontWeight: 800, fontSize: 15, color: 'var(--warning-strong)', flexShrink: 0 }}>{f.quantos}</span>
+                  <span style={{ minWidth: 0, flex: 1 }}>
+                    <span style={{ display: 'block', fontWeight: 700, fontSize: 13 }}>{f.titulo}</span>
+                    <span style={{ display: 'block', fontSize: 12, color: 'var(--ink-soft)', lineHeight: 1.45 }}>{f.porque}</span>
+                  </span>
+                  <ChevronRight size={16} style={{ color: 'var(--ink-soft)', flexShrink: 0 }} />
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
       <SearchInput value={busca} onChange={setBusca} placeholder="Buscar por nome, razão social, cidade ou CNPJ…" />
 
       <FilterGroup label="Situação">
@@ -4470,6 +4593,16 @@ function ClientesPage({ data, role, persist, askConfirm }) {
         <Chip active={filterAtivo === 'inativos'} onClick={() => setFilterAtivo('inativos')}>Inativos</Chip>
         <Chip active={filterAtivo === 'todos'} onClick={() => setFilterAtivo('todos')}>Todos</Chip>
       </FilterGroup>
+
+      {role === 'admin' && totalIncompletos > 0 && (
+        <FilterGroup label="Cadastro">
+          <Chip active={filterFalta === 'todos'} onClick={() => setFilterFalta('todos')}>Todos</Chip>
+          <Chip active={filterFalta === 'incompletos'} onClick={() => setFilterFalta('incompletos')}>Incompletos ({totalIncompletos})</Chip>
+          {resumoFaltas.map((f) => (
+            <Chip key={f.key} active={filterFalta === f.key} onClick={() => setFilterFalta(f.key)}>Sem {f.label} ({f.quantos})</Chip>
+          ))}
+        </FilterGroup>
+      )}
 
       <FilterGroup label={ramosNegocio.length > 0 ? 'Ramo, produto e estado' : 'Produto e estado'}>
         {/* O seletor de ramo só aparece quando existe ramo cadastrado. Sem
@@ -4523,6 +4656,13 @@ function ClientesPage({ data, role, persist, askConfirm }) {
                   {linha2 && <div style={{ fontSize: 12, color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{linha2}</div>}
                   {(c.contatoTelefone || c.contatoEmail) && (
                     <div style={{ fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', marginTop: 2 }}>{[c.contatoTelefone, c.contatoEmail].filter(Boolean).join(' · ')}</div>
+                  )}
+                  {/* O que falta neste cadastro, na própria linha: assim o admin
+                      vê o buraco sem abrir o cliente. */}
+                  {role === 'admin' && faltasPorCliente.has(c.id) && (
+                    <div style={{ fontSize: 'var(--fs-small)', color: 'var(--warning-strong)', marginTop: 3, fontWeight: 600 }}>
+                      Falta: {faltasPorCliente.get(c.id).map((f) => f.label).join(', ')}
+                    </div>
                   )}
                 </div>
               </div>
@@ -6261,13 +6401,28 @@ export default function App() {
       </div>
       <div style={{ height: 96 }} className="lomuz-bottomnav" aria-hidden="true" />
 
+      {/* No desktop não havia atalho nenhum pra lançar: o botão de ação rápida
+          existia só dentro da barra inferior, que fica escondida acima de 900px.
+          Agora ele acompanha o rodapé em toda página, abrindo o mesmo menu. */}
+      <button className="lomuz-fab" onClick={() => setShowQuickMenu(true)} aria-haspopup="dialog" title="Lançar cliente, venda, receita ou despesa">
+        <Plus size={19} strokeWidth={2.6} />
+        {role === 'vendedor' ? 'Nova venda' : 'Novo lançamento'}
+      </button>
+
         {showQuickMenu && (
           <Modal title="O que você quer lançar?" onClose={() => setShowQuickMenu(false)}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <QuickAddButton icon={Users} label="Cliente" desc="Cadastrar um novo cliente" onClick={() => quickAdd('cliente')} />
+              {/* Vendedor só lança venda: cadastrar cliente e lançar despesa são
+                  bloqueados pela permissão do banco, então oferecer as opções
+                  daria um erro silencioso depois de preencher o formulário. */}
               <QuickAddButton icon={ArrowUpCircle} label="Venda" desc="Lançar uma venda para um cliente" onClick={() => quickAdd('venda')} />
-              <QuickAddButton icon={ArrowUpCircle} label="Receita" desc="Lançar uma entrada que não é venda" onClick={() => quickAdd('receita')} />
-              <QuickAddButton icon={ArrowDownCircle} label="Despesa" desc="Lançar uma saída" onClick={() => quickAdd('despesa')} />
+              {role !== 'vendedor' && (
+                <>
+                  <QuickAddButton icon={Users} label="Cliente" desc="Cadastrar um novo cliente" onClick={() => quickAdd('cliente')} />
+                  <QuickAddButton icon={ArrowUpCircle} label="Receita" desc="Lançar uma entrada que não é venda" onClick={() => quickAdd('receita')} />
+                  <QuickAddButton icon={ArrowDownCircle} label="Despesa" desc="Lançar uma saída" onClick={() => quickAdd('despesa')} />
+                </>
+              )}
             </div>
           </Modal>
         )}
