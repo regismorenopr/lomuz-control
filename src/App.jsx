@@ -4698,20 +4698,22 @@ function RelatoriosPage({ data, subTab, setSubTab, onConfirmarRecebimento, onEdi
   const fornecedores = data.fornecedores || [];
 
   const calc = useMemo(() => {
-    // Relatório mostra o que já aconteceu. "Este ano" e "Este mês" terminam no
-    // futuro, e sem esse corte a receita recorrente seria projetada pra frente e
-    // somada como se já tivesse entrado — número bonito e falso. Períodos
-    // inteiramente passados (mês/ano passado) não são afetados.
-    const bruto = getPeriodRange(period);
-    const hoje = new Date();
-    const cortado = bruto.end > hoje;
-    const r = cortado ? { start: bruto.start, end: hoje } : bruto;
+    // O relatório usa o período inteiro, igual ao painel: escolhendo o ano
+    // corrente ele vai de janeiro a dezembro, com o realizado nos meses que já
+    // passaram e a projeção dos contratos recorrentes nos que faltam. Assim o
+    // mesmo mês dá o mesmo número nas duas telas. O que não pode faltar é dizer
+    // quais meses são projeção — daí o marcador "previsto" e o aviso no topo.
+    const r = getPeriodRange(period);
+    const incluiFuturo = r.end > endOfMonth(new Date());
+    const mesAtualKey = monthKey(new Date());
     const nomeCategoria = (id) => data.categories.find((c) => c.id === id)?.nome || 'Sem categoria';
     const nomeFornecedor = (id) => fornecedores.find((f) => f.id === id)?.nome || 'Sem fornecedor informado';
 
     const meses = buildPeriodMonthlyRows(txs, r).map((m) => ({
       ...m,
       margem: m.receitas > 0 ? (m.saldo / m.receitas) * 100 : null,
+      // Mês corrente não é previsão — ele já está acontecendo.
+      previsto: m.key > mesAtualKey,
     }));
     const totalReceita = round2(meses.reduce((s, m) => s + m.receitas, 0));
     const totalDespesa = round2(meses.reduce((s, m) => s + m.despesas, 0));
@@ -4765,7 +4767,7 @@ function RelatoriosPage({ data, subTab, setSubTab, onConfirmarRecebimento, onEdi
     }
 
     return {
-      r, cortado, meses, totalReceita, totalDespesa,
+      r, incluiFuturo, meses, totalReceita, totalDespesa,
       nomeCategoria, nomeFornecedor,
       despCategoria, despFornecedor, despTipoCusto, recCategoria, recCliente,
       mrr, ativos: ativos.length, totalRecorrentes: recorrentes.length,
@@ -4775,18 +4777,24 @@ function RelatoriosPage({ data, subTab, setSubTab, onConfirmarRecebimento, onEdi
 
   const sufixo = `${toISODate(calc.r.start)}_a_${toISODate(calc.r.end)}`;
   const pct = (v) => (v == null ? '—' : `${v.toFixed(1).replace('.', ',')}%`);
-  // Rótulo honesto do que está na tela: quando o período foi cortado em hoje, o
-  // nome do preset ("Ano de 2026") mentiria sobre o que foi somado.
-  const rotuloPeriodo = calc.cortado
-    ? `${mesAnoLabel(calc.r.start)} até ${formatDateBR(toISODate(calc.r.end))}`
-    : periodLabel(period);
+  // Rótulo honesto do que está na tela: quando o período entra no futuro, o
+  // total soma realizado + projeção, e isso precisa estar escrito no cartão.
+  const rotuloPeriodo = calc.incluiFuturo ? `${periodLabel(period)} · inclui previsão` : periodLabel(period);
+  // Sufixo colado na explicação de cada tabela quando o período passa de hoje:
+  // sem isso o número parece 100% realizado.
+  const avisoPrevisao = calc.incluiFuturo ? ' Inclui a projeção dos meses que ainda não aconteceram.' : '';
 
   const NOME_TIPO_CUSTO = { fixa: 'Fixa (todo mês)', variavel: 'Variável (eventual)', nao_classificada: 'Não classificada' };
 
   function blocoResultado() {
     const linhas = calc.meses.map((m) => ({
       chave: m.key,
-      celulas: [m.label, formatCurrency(m.receitas), formatCurrency(m.despesas), formatCurrency(m.saldo), pct(m.margem)],
+      celulas: [
+        m.previsto
+          ? <>{m.label}<span style={{ marginLeft: 6, fontSize: 'var(--fs-micro)', fontWeight: 700, color: 'var(--ink-soft)', background: 'var(--surface-2)', borderRadius: 999, padding: '2px 7px' }}>previsto</span></>
+          : m.label,
+        formatCurrency(m.receitas), formatCurrency(m.despesas), formatCurrency(m.saldo), pct(m.margem),
+      ],
       tom: m.saldo < 0 ? 'var(--negative)' : undefined,
     }));
     const saldoTotal = round2(calc.totalReceita - calc.totalDespesa);
@@ -4801,12 +4809,13 @@ function RelatoriosPage({ data, subTab, setSubTab, onConfirmarRecebimento, onEdi
         </div>
         <RelatorioTabela
           titulo="Resultado mês a mês"
-          desc="Receita e despesa realizadas em cada mês do período. Contratos recorrentes entram mês a mês, uma cobrança por mês ativo — é por isso que a soma aqui é maior que a soma dos valores de contrato."
+          desc={`Receita e despesa de cada mês do período. Contratos recorrentes entram mês a mês, uma cobrança por mês ativo — é por isso que a soma aqui é maior que a soma dos valores de contrato.${calc.incluiFuturo ? ' Mês marcado como previsto ainda não aconteceu: é projeção dos contratos já cadastrados.' : ''}`}
           colunas={[{ label: 'Mês' }, { label: 'Receita', align: 'right' }, { label: 'Despesa', align: 'right' }, { label: 'Resultado', align: 'right' }, { label: 'Margem', align: 'right' }]}
           linhas={linhas}
           rodape={['Total', formatCurrency(calc.totalReceita), formatCurrency(calc.totalDespesa), formatCurrency(saldoTotal), pct(margemTotal)]}
           onBaixar={() => baixarCSV(`resultado-mes-a-mes_${sufixo}.csv`, calc.meses.map((m) => ({
-            'Mês': m.label, Receita: numeroCSV(m.receitas), Despesa: numeroCSV(m.despesas),
+            'Mês': m.label, 'Situação': m.previsto ? 'previsto' : 'realizado',
+            Receita: numeroCSV(m.receitas), Despesa: numeroCSV(m.despesas),
             Resultado: numeroCSV(m.saldo), 'Margem %': m.margem == null ? '' : numeroCSV(m.margem),
           })))}
         />
@@ -4823,7 +4832,7 @@ function RelatoriosPage({ data, subTab, setSubTab, onConfirmarRecebimento, onEdi
       <>
         <RelatorioTabela
           titulo="Despesas por categoria"
-          desc="Para onde o dinheiro foi, agrupado pela categoria de cada lançamento."
+          desc={`Para onde o dinheiro foi, agrupado pela categoria de cada lançamento.${avisoPrevisao}`}
           colunas={[{ label: 'Categoria' }, { label: 'Lançamentos', align: 'right' }, { label: 'Total', align: 'right' }, { label: '% do total', align: 'right' }]}
           linhas={cat.rows.map((row) => ({ chave: row.chave, celulas: [calc.nomeCategoria(row.chave), String(row.cobrancas), formatCurrency(row.valor), pct(row.pct)] }))}
           rodape={['Total', String(cat.rows.reduce((s, x) => s + x.cobrancas, 0)), formatCurrency(cat.total), '100,0%']}
@@ -4834,7 +4843,7 @@ function RelatoriosPage({ data, subTab, setSubTab, onConfirmarRecebimento, onEdi
 
         <RelatorioTabela
           titulo="Despesas por fornecedor"
-          desc={`Quem mais recebeu no período.${forn.rows.length > fornVisiveis.length ? ` Mostrando os ${fornVisiveis.length} maiores de ${forn.rows.length} — o CSV traz todos.` : ''}`}
+          desc={`Quem mais recebeu no período.${forn.rows.length > fornVisiveis.length ? ` Mostrando os ${fornVisiveis.length} maiores de ${forn.rows.length} — o CSV traz todos.` : ''}${avisoPrevisao}`}
           colunas={[{ label: 'Fornecedor' }, { label: 'Lançamentos', align: 'right' }, { label: 'Total', align: 'right' }, { label: '% do total', align: 'right' }]}
           linhas={fornVisiveis.map((row) => ({ chave: row.chave, celulas: [calc.nomeFornecedor(row.chave), String(row.cobrancas), formatCurrency(row.valor), pct(row.pct)] }))}
           rodape={['Total (todos)', String(forn.rows.reduce((s, x) => s + x.cobrancas, 0)), formatCurrency(forn.total), '100,0%']}
@@ -4871,7 +4880,7 @@ function RelatoriosPage({ data, subTab, setSubTab, onConfirmarRecebimento, onEdi
       <>
         <RelatorioTabela
           titulo="Receita por produto"
-          desc="Cada categoria de receita, com o número de cobranças que ela gerou no período."
+          desc={`Cada categoria de receita, com o número de cobranças que ela gerou no período.${avisoPrevisao}`}
           colunas={[{ label: 'Produto / categoria' }, { label: 'Cobranças', align: 'right' }, { label: 'Contratos', align: 'right' }, { label: 'Total', align: 'right' }, { label: '% do total', align: 'right' }]}
           linhas={cat.rows.map((row) => ({ chave: row.chave, celulas: [calc.nomeCategoria(row.chave), String(row.cobrancas), String(row.lancamentos), formatCurrency(row.valor), pct(row.pct)] }))}
           rodape={['Total', String(cat.rows.reduce((s, x) => s + x.cobrancas, 0)), String(cat.rows.reduce((s, x) => s + x.lancamentos, 0)), formatCurrency(cat.total), '100,0%']}
@@ -4882,7 +4891,7 @@ function RelatoriosPage({ data, subTab, setSubTab, onConfirmarRecebimento, onEdi
 
         <RelatorioTabela
           titulo="Receita por cliente"
-          desc={`Quem mais faturou no período.${cli.rows.length > cliVisiveis.length ? ` Mostrando os ${cliVisiveis.length} maiores de ${cli.rows.length} — o CSV traz todos.` : ''}`}
+          desc={`Quem mais faturou no período.${cli.rows.length > cliVisiveis.length ? ` Mostrando os ${cliVisiveis.length} maiores de ${cli.rows.length} — o CSV traz todos.` : ''}${avisoPrevisao}`}
           colunas={[{ label: 'Cliente' }, { label: 'Cobranças', align: 'right' }, { label: 'Contratos', align: 'right' }, { label: 'Total', align: 'right' }, { label: '% do total', align: 'right' }]}
           linhas={cliVisiveis.map((row) => ({ chave: row.chave, celulas: [nomeCli(row.chave), String(row.cobrancas), String(row.lancamentos), formatCurrency(row.valor), pct(row.pct)] }))}
           rodape={['Total (todos)', String(cli.rows.reduce((s, x) => s + x.cobrancas, 0)), String(cli.rows.reduce((s, x) => s + x.lancamentos, 0)), formatCurrency(cli.total), '100,0%']}
@@ -4964,14 +4973,12 @@ function RelatoriosPage({ data, subTab, setSubTab, onConfirmarRecebimento, onEdi
       {subTab !== 'vencimentos' && (
         <Card style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 'var(--fs-micro)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)', marginBottom: 8 }}>Período do relatório</div>
-          {/* anoMax no ano corrente: relatório só fala do que já aconteceu, e
-              um ano futuro devolveria tabela vazia. Projeção pra frente é o
-              painel Início e a tela Previsão. */}
-          <PeriodSelector value={period} onChange={setPeriod} presets={PERIOD_PRESETS_RELATORIO} anoMax={new Date().getFullYear()} />
-          {calc.cortado && (
+          <PeriodSelector value={period} onChange={setPeriod} presets={PERIOD_PRESETS_RELATORIO} />
+          {calc.incluiFuturo && (
             <div style={{ marginTop: 8, fontSize: 'var(--fs-small)', color: 'var(--ink-soft)', lineHeight: 1.5 }}>
-              O relatório vai até hoje ({formatDateBR(toISODate(calc.r.end))}). Mês que ainda não aconteceu não entra na conta —
-              para ver o que está previsto pra frente, use a tela <strong>Previsão</strong>.
+              Este período passa de hoje ({formatDateBR(toISODate(new Date()))}). Os meses marcados como <strong>previsto</strong> são
+              projeção dos contratos recorrentes já cadastrados — os totais somam realizado mais previsão, e é o mesmo número
+              que o painel Início mostra pro mesmo período.
             </div>
           )}
         </Card>
@@ -5051,7 +5058,8 @@ const AJUDA_SECOES = [
     titulo: 'Relatórios',
     todos: false,
     itens: [
-      ['Período', 'Todo relatório começa pelo período no alto da tela: este mês, mês passado, últimos 3, últimos 12, este ano, ano passado ou datas escolhidas por você. Tudo abaixo recalcula na hora.'],
+      ['Período', 'Todo relatório começa pelo período no alto da tela: este mês, mês passado, últimos 3, últimos 12, por ano (com setas para recuar ou avançar de ano) ou datas escolhidas por você. Tudo abaixo recalcula na hora.'],
+      ['Mês previsto', 'Quando o período passa da data de hoje — o ano corrente, por exemplo, vai até dezembro — os meses que ainda não aconteceram aparecem marcados como "previsto": o valor é a projeção dos contratos recorrentes já cadastrados. O total soma o realizado mais essa previsão, e é o mesmo número que o painel Início mostra para o mesmo período.'],
       ['Resultado mês a mês', 'Quanto entrou, quanto saiu, quanto sobrou e a margem de cada mês. A margem é quanto sobrou de cada R$ 100 que entraram. Contrato recorrente entra uma vez por mês ativo, e é por isso que a soma aqui é maior que a soma dos valores de contrato.'],
       ['Despesas', 'Três olhares sobre o mesmo gasto: por categoria (para onde foi), por fornecedor (quem recebeu) e custo fixo x variável (o que se repete todo mês contra o que dá pra apertar).'],
       ['Receita', 'Por produto (o que mais vende) e por cliente (quem mais fatura). "Cobranças" é quantas vezes aquilo foi faturado no período; "contratos" é quantas vendas diferentes.'],
