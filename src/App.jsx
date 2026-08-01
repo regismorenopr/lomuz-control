@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
@@ -1104,6 +1104,83 @@ function QuickAddButton({ icon: Icon, label, desc, onClick }) {
         <span style={{ display: 'block', fontSize: 'var(--fs-body)', color: 'var(--ink-soft)', marginTop: 2 }}>{desc}</span>
       </span>
     </button>
+  );
+}
+
+// Item do popover do botão rápido: compacto (ícone + rótulo numa linha), ao
+// contrário do QuickAddButton grande usado no bottom sheet do celular — um
+// popover ancorado no botão precisa ser pequeno, senão vira outro modal.
+function FabMenuItem({ icon: Icon, label, onClick }) {
+  return (
+    <button
+      role="menuitem"
+      onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+        padding: '10px 12px', background: 'transparent', border: 'none',
+        borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+        color: 'var(--text-primary)', fontSize: 'var(--fs-body)', fontWeight: 600,
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-2)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+    >
+      <Icon size={17} style={{ color: 'var(--primary-text)', flexShrink: 0 }} />
+      {label}
+    </button>
+  );
+}
+
+// Botão rápido do desktop: só o "+", sem texto — o rótulo por extenso só fazia
+// sentido enquanto ele abria um modal genérico ("O que você quer lançar?"); um
+// ícone sozinho e óbvio é o padrão de SaaS pra esse botão. As opções abrem num
+// popover ancorado nele mesmo (sobe a partir do canto), não um modal no centro
+// da tela — mesma lógica de abrir/fechar do menu de Cadastros no cabeçalho.
+function DesktopQuickAddFab({ role, onQuickAdd }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    function onEsc(e) { if (e.key === 'Escape') setOpen(false); }
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onEsc);
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onEsc); };
+  }, [open]);
+
+  function selecionar(tipo) {
+    setOpen(false);
+    onQuickAdd(tipo);
+  }
+
+  return (
+    <div ref={ref} className="lomuz-fab-wrap">
+      {open && (
+        <div role="menu" aria-label="O que você quer lançar" className="lomuz-fab-menu">
+          {/* Vendedor só lança venda: cadastrar cliente e lançar despesa são
+              bloqueados pela permissão do banco, então oferecer as opções
+              daria um erro silencioso depois de preencher o formulário. */}
+          <FabMenuItem icon={ArrowUpCircle} label="Venda" onClick={() => selecionar('venda')} />
+          {role !== 'vendedor' && (
+            <>
+              <FabMenuItem icon={Users} label="Cliente" onClick={() => selecionar('cliente')} />
+              <FabMenuItem icon={ArrowUpCircle} label="Receita" onClick={() => selecionar('receita')} />
+              <FabMenuItem icon={ArrowDownCircle} label="Despesa" onClick={() => selecionar('despesa')} />
+            </>
+          )}
+        </div>
+      )}
+      <button
+        className="lomuz-fab"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Lançar cliente, venda, receita ou despesa"
+        title="Novo lançamento"
+      >
+        <Plus size={24} strokeWidth={2.6} />
+      </button>
+    </div>
   );
 }
 
@@ -6969,11 +7046,9 @@ export default function App() {
 
       {/* No desktop não havia atalho nenhum pra lançar: o botão de ação rápida
           existia só dentro da barra inferior, que fica escondida acima de 900px.
-          Agora ele acompanha o rodapé em toda página, abrindo o mesmo menu. */}
-      <button className="lomuz-fab" onClick={() => setShowQuickMenu(true)} aria-haspopup="dialog" title="Lançar cliente, venda, receita ou despesa">
-        <Plus size={19} strokeWidth={2.6} />
-        {role === 'vendedor' ? 'Nova venda' : 'Novo lançamento'}
-      </button>
+          Agora ele acompanha o rodapé em toda página. Menu próprio (popover
+          ancorado no botão), separado do bottom sheet do celular abaixo. */}
+      <DesktopQuickAddFab role={role} onQuickAdd={quickAdd} />
 
         {showQuickMenu && (
           <Modal title="O que você quer lançar?" onClose={() => setShowQuickMenu(false)}>

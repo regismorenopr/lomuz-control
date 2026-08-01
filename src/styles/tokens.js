@@ -178,19 +178,29 @@ export const GLOBAL_CSS = `
 
 /* Botão rápido de lançamento, fixo no rodapé em toda página. Só aparece no
    desktop: no celular quem faz esse papel é o botão central da barra inferior,
-   e dois botões flutuantes disputariam o mesmo canto. */
+   e dois botões flutuantes disputariam o mesmo canto. Só o ícone "+", sem
+   texto — o rótulo por extenso fazia sentido pra um modal genérico, mas um
+   botão de ação flutuante em SaaS é reconhecido pelo símbolo, não pela legenda. */
+.lomuz-fab-wrap { position:fixed; right:24px; bottom:24px; z-index:45; }
+@media (max-width: 900px) { .lomuz-fab-wrap { display:none; } }
 .lomuz-fab {
-  position:fixed; right:24px; bottom:24px; z-index:45;
-  display:flex; align-items:center; gap:8px;
-  padding:14px 20px; border:none; border-radius:var(--radius-pill);
+  width:56px; height:56px; border-radius:50%; border:none;
+  display:flex; align-items:center; justify-content:center;
   background:var(--gradient-brand); color:#fff; cursor:pointer;
-  font-size:var(--fs-body); font-weight:700; white-space:nowrap;
   box-shadow:0 10px 24px rgba(109,40,217,0.38);
   transition:transform .15s, box-shadow .15s;
 }
-.lomuz-fab:hover { transform:translateY(-2px); box-shadow:0 14px 30px rgba(109,40,217,0.46); }
+.lomuz-fab:hover { transform:translateY(-2px) scale(1.04); box-shadow:0 14px 30px rgba(109,40,217,0.46); }
 .lomuz-fab:focus-visible { outline:3px solid var(--primary-text); outline-offset:3px; }
-@media (max-width: 900px) { .lomuz-fab { display:none; } }
+
+/* Popover das opções: ancorado no próprio botão, abrindo pra cima (o botão vive
+   no canto inferior direito) — não um modal cobrindo o centro da tela. */
+.lomuz-fab-menu {
+  position:absolute; right:0; bottom:calc(100% + 12px); min-width:220px;
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-lg); padding:6px; display:flex; flex-direction:column; gap:2px;
+  animation:lomuzFadeIn .12s ease-out;
+}
 
 /* Área de conteúdo do layout desktop: usa a largura disponível, com um teto
    confortável para leitura de tabelas e gráficos. */
