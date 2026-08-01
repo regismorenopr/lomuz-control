@@ -534,6 +534,13 @@ function getPeriodRange(period) {
       const y = period.ano || today.getFullYear();
       return { start: new Date(y, 0, 1), end: new Date(y, 11, 31) };
     }
+    // Um mês escolhido, com a mesma navegação de recuar/avançar do "ano":
+    // mesOffset é a distância em meses até hoje (0 = mês atual, -1 = mês
+    // passado, 1 = mês que vem).
+    case 'mes': {
+      const alvo = addMonths(today, period.mesOffset || 0);
+      return { start: startOfMonth(alvo), end: endOfMonth(alvo) };
+    }
     case 'custom':
       return {
         start: period.start ? parseISODate(period.start) : startOfMonth(today),
@@ -586,6 +593,10 @@ function getPreviousPeriodRange(period) {
     case 'ano': {
       const y = (period.ano || today.getFullYear()) - 1;
       return { start: new Date(y, 0, 1), end: new Date(y, 11, 31) };
+    }
+    case 'mes': {
+      const alvo = addMonths(today, (period.mesOffset || 0) - 1);
+      return { start: startOfMonth(alvo), end: endOfMonth(alvo) };
     }
     case 'custom': {
       const atual = getPeriodRange(period);
@@ -1283,11 +1294,12 @@ function CategoryRow({ cat, last, onEdit, onDelete }) {
 // futuro à direita — assim como pedido.
 const PERIOD_PRESETS_PADRAO = [
   { key: 'ultimos_3', label: 'Últimos 3 meses' },
-  { key: 'mes_atual', label: 'Este mês' },
+  // O rótulo de "mes" e "ano" é montado no PeriodSelector: vira "Este mês"/
+  // "Este ano" no mês/ano corrente e passa a nomear o mês/ano quando as setas
+  // navegam pra outro.
+  { key: 'mes', label: 'Este mês' },
   { key: 'proximos_3', label: 'Próx. 3 meses' },
   { key: 'proximos_6', label: 'Próx. 6 meses' },
-  // O rótulo do ano é montado no PeriodSelector: vira "Este ano" no ano
-  // corrente e "Ano de 2025" quando as setas mudam de ano.
   { key: 'ano', label: 'Este ano' },
   { key: 'custom', label: 'Personalizado' },
 ];
@@ -1296,8 +1308,7 @@ const PERIOD_PRESETS_PADRAO = [
 // fechado (mês passado, 12 meses, ano fechado), sem as janelas futuras que o
 // painel Início usa pra projeção.
 const PERIOD_PRESETS_RELATORIO = [
-  { key: 'mes_atual', label: 'Este mês' },
-  { key: 'mes_passado', label: 'Mês passado' },
+  { key: 'mes', label: 'Este mês' },
   { key: 'ultimos_3', label: 'Últimos 3 meses' },
   { key: 'ultimos_12', label: 'Últimos 12 meses' },
   { key: 'ano', label: 'Este ano' },
@@ -1330,7 +1341,30 @@ function YearStepper({ ano, onChange, anoMin, anoMax }) {
   );
 }
 
-function PeriodSelector({ value, onChange, presets = PERIOD_PRESETS_PADRAO, anoMin, anoMax }) {
+// Mesma navegação do YearStepper, um degrau abaixo: seta, mês por extenso,
+// seta. offsetMin/offsetMax limitam o quanto dá pra recuar/avançar.
+function MonthStepper({ mesOffset, onChange, offsetMin, offsetMax }) {
+  const btn = (disabled) => ({
+    width: 34, height: 34, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
+    background: 'var(--surface)', color: disabled ? 'var(--border)' : 'var(--ink)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+    cursor: disabled ? 'default' : 'pointer',
+  });
+  const mesAtual = mesAnoLabel(addMonths(new Date(), mesOffset));
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+      <button type="button" onClick={() => mesOffset > offsetMin && onChange(mesOffset - 1)} disabled={mesOffset <= offsetMin} aria-label={`Mês anterior (${mesAnoLabel(addMonths(new Date(), mesOffset - 1))})`} style={btn(mesOffset <= offsetMin)}>
+        <ChevronRight size={17} style={{ transform: 'rotate(180deg)' }} />
+      </button>
+      <div style={{ minWidth: 150, textAlign: 'center', fontSize: 'var(--fs-title)', fontWeight: 800, letterSpacing: '-0.01em' }}>{mesAtual}</div>
+      <button type="button" onClick={() => mesOffset < offsetMax && onChange(mesOffset + 1)} disabled={mesOffset >= offsetMax} aria-label={`Mês seguinte (${mesAnoLabel(addMonths(new Date(), mesOffset + 1))})`} style={btn(mesOffset >= offsetMax)}>
+        <ChevronRight size={17} />
+      </button>
+    </div>
+  );
+}
+
+function PeriodSelector({ value, onChange, presets = PERIOD_PRESETS_PADRAO, anoMin, anoMax, mesOffsetMin = -120, mesOffsetMax = 60 }) {
   const anoHoje = new Date().getFullYear();
   const minAno = anoMin ?? anoHoje - 10;
   const maxAno = anoMax ?? anoHoje + 5;
@@ -1345,6 +1379,8 @@ function PeriodSelector({ value, onChange, presets = PERIOD_PRESETS_PADRAO, anoM
       });
     } else if (key === 'ano') {
       onChange({ ...value, type: 'ano', ano: value.ano || Math.min(anoHoje, maxAno) });
+    } else if (key === 'mes') {
+      onChange({ ...value, type: 'mes', mesOffset: value.mesOffset || 0 });
     } else {
       onChange({ ...value, type: key });
     }
@@ -1368,7 +1404,9 @@ function PeriodSelector({ value, onChange, presets = PERIOD_PRESETS_PADRAO, anoM
           <Chip key={p.key} active={value.type === p.key} onClick={() => selectPreset(p.key)}>
             {(p.key === 'ano' && value.type === 'ano' && value.ano && value.ano !== anoHoje)
               ? `Ano de ${value.ano}`
-              : (p.key === 'ano' ? 'Este ano' : p.label)}
+              : (p.key === 'mes' && value.type === 'mes' && value.mesOffset)
+                ? mesAnoLabel(addMonths(new Date(), value.mesOffset))
+                : (p.key === 'ano' ? 'Este ano' : p.key === 'mes' ? 'Este mês' : p.label)}
           </Chip>
         ))}
       </div>
@@ -1378,6 +1416,14 @@ function PeriodSelector({ value, onChange, presets = PERIOD_PRESETS_PADRAO, anoM
           onChange={(a) => onChange({ ...value, type: 'ano', ano: a })}
           anoMin={minAno}
           anoMax={maxAno}
+        />
+      )}
+      {value.type === 'mes' && (
+        <MonthStepper
+          mesOffset={value.mesOffset || 0}
+          onChange={(o) => onChange({ ...value, type: 'mes', mesOffset: o })}
+          offsetMin={mesOffsetMin}
+          offsetMax={mesOffsetMax}
         />
       )}
       {value.type === 'custom' && (
@@ -6378,7 +6424,7 @@ export default function App() {
   const [page, setPage] = useState('inicio');
   const [role, setRole] = useState('vendedor');
   const [currentVendedorId, setCurrentVendedorId] = useState(null);
-  const [period, setPeriod] = useState({ type: 'mes_atual', start: '', end: '' });
+  const [period, setPeriod] = useState({ type: 'mes', mesOffset: 0, start: '', end: '' });
   const [cadastroTab, setCadastroTab] = useState('clientes');
   const [relatorioTab, setRelatorioTab] = useState('resultado');
 
