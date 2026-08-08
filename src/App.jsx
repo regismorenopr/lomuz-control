@@ -3628,10 +3628,158 @@ function ImportCsvModal({ categories, onImport, onClose }) {
    PÁGINA: PREVISÃO
    ========================================================================= */
 
-function CategoryForecast({ data, selectedCats, setSelectedCats, periodMode, setPeriodMode, customMonths, setCustomMonths, monthsCount }) {
-  function toggleCat(id) {
-    setSelectedCats((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]));
+// Escolha de categorias em campo de múltipla seleção, não em nuvem de chips:
+// são mais de 50 categorias, e jogar todas na tela ocupava meia página antes
+// de a pessoa ver qualquer número. Aqui fica uma linha, com busca, contador e
+// as escolhidas visíveis embaixo — quem quer trocar abre, quem não quer nem vê.
+function SeletorCategorias({ categorias, selecionadas, setSelecionadas }) {
+  const [aberto, setAberto] = useState(false);
+  const [busca, setBusca] = useState('');
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!aberto) return undefined;
+    function fora(e) { if (ref.current && !ref.current.contains(e.target)) setAberto(false); }
+    function esc(e) { if (e.key === 'Escape') setAberto(false); }
+    document.addEventListener('mousedown', fora);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', fora); document.removeEventListener('keydown', esc); };
+  }, [aberto]);
+
+  const termo = busca.trim().toLowerCase();
+  const visiveis = termo ? categorias.filter((c) => c.nome.toLowerCase().includes(termo)) : categorias;
+  const receitas = visiveis.filter((c) => c.tipo === 'receita');
+  const despesas = visiveis.filter((c) => c.tipo === 'despesa');
+
+  function alterna(id) {
+    setSelecionadas((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]));
   }
+
+  function Grupo({ titulo, itens }) {
+    if (itens.length === 0) return null;
+    return (
+      <>
+        <div style={{ padding: '8px 12px 4px', fontSize: 'var(--fs-micro)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)' }}>{titulo}</div>
+        {itens.map((c) => {
+          const marcada = selecionadas.includes(c.id);
+          return (
+            <button
+              key={c.id}
+              onClick={() => alterna(c.id)}
+              role="menuitemcheckbox"
+              aria-checked={marcada}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
+                padding: '8px 12px', background: 'transparent', border: 'none', cursor: 'pointer',
+                fontSize: 'var(--fs-body)', color: 'var(--text-primary)', fontWeight: marcada ? 700 : 500,
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-2)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+            >
+              <span style={{
+                width: 17, height: 17, borderRadius: 5, flexShrink: 0,
+                border: `1.5px solid ${marcada ? 'var(--primary)' : 'var(--border)'}`,
+                background: marcada ? 'var(--primary)' : 'transparent',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                {marcada && <Check size={12} color="var(--on-primary)" strokeWidth={3} />}
+              </span>
+              <span style={{ width: 9, height: 9, borderRadius: '50%', background: c.cor || 'var(--border)', flexShrink: 0 }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.nome}</span>
+            </button>
+          );
+        })}
+      </>
+    );
+  }
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div ref={ref} style={{ position: 'relative' }}>
+        <button
+          onClick={() => setAberto((v) => !v)}
+          aria-haspopup="menu"
+          aria-expanded={aberto}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, width: '100%',
+            ...inputStyle, cursor: 'pointer', textAlign: 'left',
+            borderColor: aberto ? 'var(--primary)' : 'var(--border)',
+          }}
+        >
+          <span style={{ fontWeight: 600 }}>
+            Categorias{' '}
+            <span style={{ color: 'var(--ink-soft)', fontWeight: 500 }}>
+              · {selecionadas.length} de {categorias.length} selecionada(s)
+            </span>
+          </span>
+          <ChevronRight size={16} style={{ transform: aberto ? 'rotate(90deg)' : 'rotate(90deg)', opacity: 0.6, flexShrink: 0 }} />
+        </button>
+
+        {aberto && (
+          <div
+            role="menu"
+            style={{
+              position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 40,
+              background: 'var(--surface)', border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-lg, 14px)', boxShadow: '0 12px 32px rgba(0,0,0,.16)',
+              maxHeight: 360, display: 'flex', flexDirection: 'column',
+            }}
+          >
+            <div style={{ padding: 10, borderBottom: '1px solid var(--border)' }}>
+              <div style={{ position: 'relative' }}>
+                <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--ink-soft)', pointerEvents: 'none' }} />
+                <input
+                  autoFocus
+                  value={busca}
+                  onChange={(e) => setBusca(e.target.value)}
+                  placeholder="Buscar categoria…"
+                  style={{ ...inputStyle, paddingLeft: 30, marginBottom: 0 }}
+                />
+              </div>
+              <div style={{ display: 'flex', gap: 14, marginTop: 8 }}>
+                <button onClick={() => setSelecionadas(visiveis.map((c) => c.id))} style={linkBtnStyle}>
+                  Selecionar {termo ? 'os encontrados' : 'todas'}
+                </button>
+                <button onClick={() => setSelecionadas([])} style={linkBtnStyle}>Limpar</button>
+              </div>
+            </div>
+            <div style={{ overflowY: 'auto', padding: '4px 0' }}>
+              {visiveis.length === 0
+                ? <div style={{ padding: '12px', fontSize: 'var(--fs-body)', color: 'var(--ink-soft)' }}>Nenhuma categoria com esse nome.</div>
+                : <><Grupo titulo="Receitas" itens={receitas} /><Grupo titulo="Despesas" itens={despesas} /></>}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* As escolhidas ficam à vista, com o X pra tirar uma sem reabrir o painel. */}
+      {selecionadas.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+          {selecionadas.map((id) => {
+            const c = categorias.find((x) => x.id === id);
+            if (!c) return null;
+            return (
+              <span key={id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 8px 4px 10px', borderRadius: 'var(--radius-pill)', background: 'var(--surface-2)', border: '1px solid var(--border)', fontSize: 'var(--fs-small)', fontWeight: 600 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: c.cor || 'var(--border)' }} />
+                {c.nome}
+                <button onClick={() => alterna(id)} aria-label={`Tirar ${c.nome}`} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink-soft)', display: 'flex', padding: 0 }}>
+                  <X size={13} />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const linkBtnStyle = {
+  background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+  color: 'var(--primary-text)', fontWeight: 700, fontSize: 'var(--fs-small)',
+};
+
+function CategoryForecast({ data, selectedCats, setSelectedCats, periodMode, setPeriodMode, customMonths, setCustomMonths, monthsCount }) {
   const rows = useMemo(() => buildCategoryForecastRows(data.transactions, selectedCats, monthsCount), [data.transactions, selectedCats, monthsCount]);
 
   return (
@@ -3639,11 +3787,7 @@ function CategoryForecast({ data, selectedCats, setSelectedCats, periodMode, set
       <p style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 14, lineHeight: 1.5 }}>
         Escolha as categorias para comparar a evolução mês a mês. A projeção considera lançamentos recorrentes ativos e lançamentos futuros já cadastrados.
       </p>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
-        {data.categories.map((c) => (
-          <Chip key={c.id} active={selectedCats.includes(c.id)} onClick={() => toggleCat(c.id)}>{c.nome}</Chip>
-        ))}
-      </div>
+      <SeletorCategorias categorias={data.categories} selecionadas={selectedCats} setSelecionadas={setSelectedCats} />
       <MonthsPeriodSelector mode={periodMode} setMode={setPeriodMode} custom={customMonths} setCustom={setCustomMonths} />
 
       {selectedCats.length === 0 ? (
@@ -3708,9 +3852,6 @@ function EquipeForecast({ data, persist, askConfirm }) {
   const months = useMemo(() => computeMonthsForRange(rangeMode, customFrom, customTo), [rangeMode, customFrom, customTo]);
   const receitaCats = data.categories.filter((c) => c.tipo === 'receita');
 
-  function toggleCat(id) {
-    setSelectedCats((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]));
-  }
   async function saveVendedor(v) {
     const isNovo = !editing;
     const list = editing ? data.vendedores.map((x) => (x.id === v.id ? v : x)) : [...data.vendedores, v];
@@ -3793,11 +3934,7 @@ function EquipeForecast({ data, persist, askConfirm }) {
           <RangePeriodSelector mode={rangeMode} setMode={setRangeMode} customFrom={customFrom} setCustomFrom={setCustomFrom} customTo={customTo} setCustomTo={setCustomTo} />
 
           {receitaCats.length > 0 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
-              {receitaCats.map((c) => (
-                <Chip key={c.id} active={selectedCats.includes(c.id)} onClick={() => toggleCat(c.id)}>{c.nome}</Chip>
-              ))}
-            </div>
+            <SeletorCategorias categorias={receitaCats} selecionadas={selectedCats} setSelecionadas={setSelectedCats} />
           )}
 
           {selectedId === 'equipe' ? (
@@ -3884,9 +4021,6 @@ function VendedorForecast({ data, vendedorId }) {
     return <EmptyState icon={Users} title="Nenhum vendedor selecionado" desc="Peça ao administrador para cadastrar seu perfil de vendedor." />;
   }
 
-  function toggleCat(id) {
-    setSelectedCats((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]));
-  }
 
   const rows = buildVendedorRangeRows(data.transactions, v, months, selectedCats, data.planos);
 
@@ -3894,11 +4028,7 @@ function VendedorForecast({ data, vendedorId }) {
     <div>
       <RangePeriodSelector mode={rangeMode} setMode={setRangeMode} customFrom={customFrom} setCustomFrom={setCustomFrom} customTo={customTo} setCustomTo={setCustomTo} />
       {receitaCats.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
-          {receitaCats.map((c) => (
-            <Chip key={c.id} active={selectedCats.includes(c.id)} onClick={() => toggleCat(c.id)}>{c.nome}</Chip>
-          ))}
-        </div>
+        <SeletorCategorias categorias={receitaCats} selecionadas={selectedCats} setSelecionadas={setSelectedCats} />
       )}
       <VendedorPanoramaView vendedor={v} rows={rows} />
     </div>
@@ -3911,7 +4041,18 @@ function PrevisaoPage({ data, role, currentVendedorId, persist, askConfirm, abaE
   const [subTabLocal, setSubTabLocal] = useState('financeiro');
   const subTab = abaExterna || subTabLocal;
   const setSubTab = setSubTabLocal;
-  const [selectedCats, setSelectedCats] = useState(() => data.categories.slice(0, 3).map((c) => c.id));
+  // Abre já com as 3 maiores categorias de receita, não com as 3 primeiras da
+  // ordem alfabética — era assim que a tela abria mostrando "13º Salário" e
+  // "Adiantamento (Vale)", que não dizem nada sobre o faturamento.
+  const [selectedCats, setSelectedCats] = useState(() => {
+    const porCategoria = new Map();
+    data.transactions.forEach((t) => {
+      if (t.tipo !== 'receita' || !t.categoriaId) return;
+      porCategoria.set(t.categoriaId, (porCategoria.get(t.categoriaId) || 0) + (Number(t.valor) || 0));
+    });
+    const top = [...porCategoria.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id]) => id);
+    return top.length > 0 ? top : data.categories.filter((c) => c.tipo === 'receita').slice(0, 3).map((c) => c.id);
+  });
   const [periodMode, setPeriodMode] = useState('6');
   const [customMonths, setCustomMonths] = useState(6);
 
