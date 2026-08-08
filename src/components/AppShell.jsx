@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Home, Receipt, TrendingUp, Settings, Bell, LogOut, ChevronDown, Users, BarChart3, HelpCircle, ArrowUpCircle, ArrowDownCircle } from 'lucide-react';
+import { Home, Receipt, TrendingUp, Settings, Bell, LogOut, ChevronDown, Users, BarChart3, HelpCircle, ArrowUpCircle, ArrowDownCircle, Layers } from 'lucide-react';
 import { LogoHorizontal } from '../brand/Logo.jsx';
 
 /* =========================================================================
@@ -34,15 +34,22 @@ export function navItemsFor(role) {
   // lançamento mesmo antes de o dinheiro entrar ou sair.
   //
   // São 7 seções, o teto desta barra (no celular são 7 ícones dividindo ~317px).
-  // Por isso Vencimentos é aba de Relatórios e os cadastros são abas de
-  // Clientes — os dois cabem em submenu sem custo de largura.
+  //
+  // A ordem segue o caminho de uso: onde estou (Início), o que aconteceu
+  // (Receitas, Despesas), com quem (Clientes), o que isso quer dizer
+  // (Relatórios) e só então o que sustenta tudo (Cadastros, Configurações).
+  //
+  // "Cadastros" existe como seção própria porque os seis cadastros de apoio
+  // moravam dentro de "Clientes" — ninguém procura Categorias ou Índice de
+  // reajuste clicando em Clientes. Pra abrir espaço, Previsão virou aba de
+  // Relatórios: projeção é análise, não operação do dia.
   return [
-    { key: 'inicio', label: 'Visão geral', icon: Home },
-    { key: 'receitas', label: 'Receitas', icon: ArrowUpCircle },
-    { key: 'despesas', label: 'Despesas', icon: ArrowDownCircle },
-    { key: 'previsao', label: 'Previsão', icon: TrendingUp },
+    { key: 'inicio', label: 'Início', icon: Home },
+    { key: 'receitas', label: 'Receitas', icon: ArrowUpCircle, tint: 'var(--success)' },
+    { key: 'despesas', label: 'Despesas', icon: ArrowDownCircle, tint: 'var(--danger)' },
     { key: 'clientes', label: 'Clientes', icon: Users },
     { key: 'relatorios', label: 'Relatórios', icon: BarChart3 },
+    { key: 'cadastros', label: 'Cadastros', icon: Layers },
     { key: 'config', label: 'Configurações', icon: Settings },
   ];
 }
@@ -68,6 +75,9 @@ const navHoverOut = (active) => (e) => {
 
 function TopNavItem({ item, active, onClick }) {
   const Icon = item.icon;
+  // Receitas e Despesas carregam a cor do que significam (verde entra, vermelho
+  // sai) enquanto estão inativas — é a leitura mais rápida da barra inteira.
+  // Ativo não recebe tinta: ali o fundo já é roxo e o ícone precisa de branco.
   return (
     <button
       onClick={onClick}
@@ -76,7 +86,11 @@ function TopNavItem({ item, active, onClick }) {
       onMouseEnter={navHoverIn(active)}
       onMouseLeave={navHoverOut(active)}
     >
-      <Icon size={17} strokeWidth={active ? 2.3 : 1.9} style={{ flexShrink: 0 }} />
+      <Icon
+        size={17}
+        strokeWidth={active ? 2.3 : 1.9}
+        style={{ flexShrink: 0, color: active ? undefined : item.tint }}
+      />
       {item.label}
     </button>
   );

@@ -3905,8 +3905,12 @@ function VendedorForecast({ data, vendedorId }) {
   );
 }
 
-function PrevisaoPage({ data, role, currentVendedorId, persist, askConfirm }) {
-  const [subTab, setSubTab] = useState('financeiro');
+function PrevisaoPage({ data, role, currentVendedorId, persist, askConfirm, abaExterna }) {
+  // Dentro de Relatórios quem manda na aba é o menu de Relatórios; as chips
+  // locais sumiriam repetindo a mesma escolha duas vezes na tela.
+  const [subTabLocal, setSubTabLocal] = useState('financeiro');
+  const subTab = abaExterna || subTabLocal;
+  const setSubTab = setSubTabLocal;
   const [selectedCats, setSelectedCats] = useState(() => data.categories.slice(0, 3).map((c) => c.id));
   const [periodMode, setPeriodMode] = useState('6');
   const [customMonths, setCustomMonths] = useState(6);
@@ -3923,10 +3927,12 @@ function PrevisaoPage({ data, role, currentVendedorId, persist, askConfirm }) {
 
   return (
     <div style={{ paddingTop: 12 }}>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        <Chip active={subTab === 'financeiro'} onClick={() => setSubTab('financeiro')}>Financeiro</Chip>
-        <Chip active={subTab === 'equipe'} onClick={() => setSubTab('equipe')}>Equipe de vendas</Chip>
-      </div>
+      {!abaExterna && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          <Chip active={subTab === 'financeiro'} onClick={() => setSubTab('financeiro')}>Financeiro</Chip>
+          <Chip active={subTab === 'equipe'} onClick={() => setSubTab('equipe')}>Equipe de vendas</Chip>
+        </div>
+      )}
       {subTab === 'financeiro' ? (
         <CategoryForecast data={data} selectedCats={selectedCats} setSelectedCats={setSelectedCats} periodMode={periodMode} setPeriodMode={setPeriodMode} customMonths={customMonths} setCustomMonths={setCustomMonths} monthsCount={monthsCount} />
       ) : (
@@ -4041,8 +4047,9 @@ function PlanoForm({ plano, categories, servicos, onSubmit, onCancel }) {
 // Clientes: são todos cadastro de apoio, o cliente é o principal, e assim a
 // barra de navegação fica com 7 seções em vez de 8. A aba "Clientes" é a
 // primeira e é o que abre por padrão.
+// Clientes saiu daqui: virou seção própria no menu. O que sobra é cadastro de
+// apoio — coisa que se configura uma vez e quase não se volta.
 const CADASTROS_TABS = [
-  { key: 'clientes', label: 'Clientes' },
   { key: 'fornecedores', label: 'Fornecedores' },
   { key: 'categorias', label: 'Categorias' },
   { key: 'planos', label: 'Planos negociados' },
@@ -5510,13 +5517,20 @@ function VencimentosPage({ data, onConfirmarRecebimento, onEditTransaction }) {
    lateral segue valendo.
    ========================================================================= */
 
+// Projeção e Equipe vieram da antiga seção "Previsão": as duas respondem
+// perguntas de análise, que é do que Relatórios trata. Ficam por último porque
+// olham pra frente, e as outras cinco olham pro que já aconteceu.
 const RELATORIOS_TABS = [
   { key: 'resultado', label: 'Resultado mês a mês' },
   { key: 'despesas', label: 'Despesas' },
   { key: 'receita', label: 'Receita' },
   { key: 'contratos', label: 'Contratos recorrentes' },
   { key: 'vencimentos', label: 'Vencimentos' },
+  { key: 'projecao', label: 'Projeção' },
+  { key: 'equipe', label: 'Equipe de vendas' },
 ];
+// As duas abas acima não são do RelatoriosPage — são a antiga Previsão.
+const RELATORIOS_TABS_DA_PREVISAO = ['projecao', 'equipe'];
 
 function RelatoriosTabNav({ subTab, setSubTab }) {
   return (
@@ -6446,7 +6460,7 @@ export default function App() {
   const [role, setRole] = useState('vendedor');
   const [currentVendedorId, setCurrentVendedorId] = useState(null);
   const [period, setPeriod] = useState({ type: 'mes', mesOffset: 0, start: '', end: '' });
-  const [cadastroTab, setCadastroTab] = useState('clientes');
+  const [cadastroTab, setCadastroTab] = useState('fornecedores');
   const [relatorioTab, setRelatorioTab] = useState('resultado');
 
   const [showAddTx, setShowAddTx] = useState(false);
@@ -6488,10 +6502,9 @@ export default function App() {
     else setData(null);
   }, [session]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { if (role === 'vendedor' && (page === 'despesas' || page === 'relatorios')) setPage('inicio'); }, [role]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Vendedor não tem cadastros: se a aba tivesse ficado em outra, a página de
-  // Clientes abriria vazia pra ele.
-  useEffect(() => { if (role === 'vendedor') setCadastroTab('clientes'); }, [role]);
+  // Vendedor não tem Despesas, Relatórios nem Cadastros — se a sessão anterior
+  // tinha parado numa dessas, ele cairia numa tela em branco.
+  useEffect(() => { if (role === 'vendedor' && (page === 'despesas' || page === 'relatorios' || page === 'cadastros')) setPage('inicio'); }, [role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadData(s) {
     const userId = s.user.id;
@@ -6961,19 +6974,22 @@ export default function App() {
   // Título da página de Clientes acompanha a aba aberta: a página abriga os
   // cadastros todos, e "Clientes" no cabeçalho enquanto a tela mostra Serviços
   // seria confuso.
-  const tituloCadastro = CADASTROS_TABS.find((t) => t.key === cadastroTab)?.label || 'Clientes';
+  const tituloCadastro = CADASTROS_TABS.find((t) => t.key === cadastroTab)?.label || 'Cadastros';
+  const tituloRelatorio = RELATORIOS_TABS_DA_PREVISAO.includes(relatorioTab)
+    ? RELATORIOS_TABS.find((t) => t.key === relatorioTab)?.label
+    : 'Relatórios';
   const pageTitles = {
-    inicio: 'Visão geral',
+    inicio: 'Início',
     receitas: role === 'vendedor' ? 'Suas vendas' : 'Receitas',
     despesas: 'Despesas',
     previsao: role === 'vendedor' ? 'Sua previsão' : 'Previsão',
-    clientes: role === 'vendedor' ? 'Clientes' : tituloCadastro,
-    relatorios: 'Relatórios',
+    clientes: 'Clientes',
+    cadastros: tituloCadastro,
+    relatorios: tituloRelatorio,
     config: 'Configurações',
     ajuda: 'Ajuda',
   };
   const subtitulosCadastro = {
-    clientes: 'Cadastro de clientes, com busca, filtros, aviso de cadastro incompleto e de reajuste de contrato.',
     fornecedores: 'Quem a empresa paga, com quanto já foi pago e quanto está em aberto para cada um.',
     categorias: 'Os grupos que organizam receitas e despesas nos relatórios.',
     planos: 'Combinações prontas de preço e comissão para agilizar o lançamento da venda.',
@@ -6994,8 +7010,13 @@ export default function App() {
       : 'Projeção financeira e panorama da equipe de vendas.',
     clientes: role === 'vendedor'
       ? 'Cadastro de clientes, com busca e filtros.'
-      : subtitulosCadastro[cadastroTab] || subtitulosCadastro.clientes,
-    relatorios: 'Resultado, despesas, receita, contratos e vencimentos — cada um com opção de baixar em CSV.',
+      : 'Cadastro de clientes, com busca, filtros, aviso de cadastro incompleto e de reajuste de contrato.',
+    cadastros: subtitulosCadastro[cadastroTab] || 'Os cadastros de apoio que alimentam o resto do sistema.',
+    relatorios: relatorioTab === 'projecao'
+      ? 'Projeção de receitas e despesas mês a mês, a partir dos contratos já cadastrados.'
+      : relatorioTab === 'equipe'
+        ? 'Metas, realizado e comissão de cada vendedor no período.'
+        : 'Resultado, despesas, receita, contratos e vencimentos — cada um com opção de baixar em CSV.',
     config: 'Aparência, usuários e mural de orientação.',
     ajuda: 'Como usar cada parte do sistema, explicado passo a passo.',
   };
@@ -7037,14 +7058,9 @@ export default function App() {
         pageTitle={pageTitles[page] || 'Lomuz Control'}
         pageSubtitle={pageSubtitles[page]}
         alerts={alerts}
-        onAlertClick={(a) => {
-          // Aviso de cliente leva pra aba de clientes, não pra aba de cadastro
-          // que estivesse aberta antes.
-          if (a.page === 'clientes') setCadastroTab('clientes');
-          setPage(a.page || 'inicio');
-        }}
-        submenus={role !== 'vendedor' ? { clientes: CADASTROS_TABS, relatorios: RELATORIOS_TABS } : {}}
-        activeSubKey={{ clientes: cadastroTab, relatorios: relatorioTab }}
+        onAlertClick={(a) => setPage(a.page || 'inicio')}
+        submenus={role !== 'vendedor' ? { cadastros: CADASTROS_TABS, relatorios: RELATORIOS_TABS } : {}}
+        activeSubKey={{ cadastros: cadastroTab, relatorios: relatorioTab }}
         onSubSelect={(secao, subKey) => (secao === 'relatorios' ? setRelatorioTab(subKey) : setCadastroTab(subKey))}
       >
         {page === 'inicio' && (
@@ -7066,31 +7082,42 @@ export default function App() {
             onNovo={() => openAddTransaction('despesa')}
           />
         )}
+        {/* Vendedor continua com "Previsão" como seção própria: a barra dele
+            tem 5 itens e não precisou de Relatórios pra abrir espaço. */}
         {page === 'previsao' && (
           <PrevisaoPage data={data} role={role} currentVendedorId={currentVendedorId} persist={persist} askConfirm={askConfirm} />
         )}
-        {/* Clientes é a casa dos cadastros: a aba "Clientes" mostra a lista de
-            clientes, as outras mostram os cadastros de apoio. Vendedor só vê a
-            primeira, então nem a barra de abas aparece pra ele. */}
+        {/* Clientes agora é só clientes. Os cadastros de apoio saíram daqui. */}
         {page === 'clientes' && (
-          <div>
-            {/* Sem paddingTop aqui: ClientesPage e CategoriasPage já abrem com
-                o próprio espaçamento — um wrapper com padding duplicaria o
-                respiro no topo da tela. */}
-            {role !== 'vendedor' && <CadastrosTabNav subTab={cadastroTab} setSubTab={setCadastroTab} />}
-            {(role === 'vendedor' || cadastroTab === 'clientes')
-              ? <ClientesPage data={data} role={role} persist={persist} askConfirm={askConfirm} />
-              : <CategoriasPage data={data} persist={persist} askConfirm={askConfirm} subTab={cadastroTab} setSubTab={setCadastroTab} />}
+          <ClientesPage data={data} role={role} persist={persist} askConfirm={askConfirm} />
+        )}
+        {/* A barra de abas mora aqui, não dentro do CategoriasPage: ele tem um
+            ramo por tipo de cadastro e a barra precisa aparecer em todos. */}
+        {page === 'cadastros' && role !== 'vendedor' && (
+          <div style={{ paddingTop: 12 }}>
+            <CadastrosTabNav subTab={cadastroTab} setSubTab={setCadastroTab} />
+            <CategoriasPage data={data} persist={persist} askConfirm={askConfirm} subTab={cadastroTab} setSubTab={setCadastroTab} />
           </div>
         )}
         {page === 'relatorios' && role !== 'vendedor' && (
-          <RelatoriosPage
-            data={data}
-            subTab={relatorioTab}
-            setSubTab={setRelatorioTab}
-            onConfirmarRecebimento={confirmarRecebimento}
-            onEditTransaction={openEditTransaction}
-          />
+          RELATORIOS_TABS_DA_PREVISAO.includes(relatorioTab) ? (
+            <div style={{ paddingTop: 12 }}>
+              <RelatoriosTabNav subTab={relatorioTab} setSubTab={setRelatorioTab} />
+              <PrevisaoPage
+                data={data} role={role} currentVendedorId={currentVendedorId}
+                persist={persist} askConfirm={askConfirm}
+                abaExterna={relatorioTab === 'equipe' ? 'equipe' : 'financeiro'}
+              />
+            </div>
+          ) : (
+            <RelatoriosPage
+              data={data}
+              subTab={relatorioTab}
+              setSubTab={setRelatorioTab}
+              onConfirmarRecebimento={confirmarRecebimento}
+              onEditTransaction={openEditTransaction}
+            />
+          )
         )}
         {page === 'ajuda' && (
           <AjudaPage role={role} />
