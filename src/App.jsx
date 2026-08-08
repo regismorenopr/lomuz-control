@@ -515,8 +515,26 @@ function getPeriodRange(period) {
       const m = addMonths(today, -1);
       return { start: startOfMonth(m), end: endOfMonth(m) };
     }
+    // "Hoje" é o único período que não fecha em mês: vai do começo ao fim do
+    // dia. Serve pra conferir o movimento do dia, não pra análise de tendência.
+    case 'hoje': {
+      const ini = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const fim = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+      return { start: ini, end: fim };
+    }
     case 'ultimos_3':
       return { start: startOfMonth(addMonths(today, -2)), end: endOfMonth(today) };
+    // Trimestre e semestre são janelas móveis a partir do mês atual, não
+    // trimestre civil: "últimos 3 meses" contando o corrente é o que a pessoa
+    // quer dizer com "último trimestre" no dia a dia.
+    case 'ultimo_trimestre':
+      return { start: startOfMonth(addMonths(today, -2)), end: endOfMonth(today) };
+    case 'ultimo_semestre':
+      return { start: startOfMonth(addMonths(today, -5)), end: endOfMonth(today) };
+    case 'proximo_trimestre':
+      return { start: startOfMonth(today), end: endOfMonth(addMonths(today, 2)) };
+    case 'proximo_semestre':
+      return { start: startOfMonth(today), end: endOfMonth(addMonths(today, 5)) };
     case 'ultimos_12':
       return { start: startOfMonth(addMonths(today, -11)), end: endOfMonth(today) };
     case 'ano_passado':
@@ -555,6 +573,7 @@ function getPeriodRange(period) {
 // este rótulo diz, e vale para todas as opções do seletor.
 function periodLabel(period) {
   const { start, end } = getPeriodRange(period);
+  if (period.type === 'hoje') return `Hoje, ${formatDateBR(toISODate(start))}`;
   if (period.type === 'custom') return `${formatDateBR(toISODate(start))} a ${formatDateBR(toISODate(end))}`;
   if (period.type === 'ano' || period.type === 'ano_atual' || period.type === 'ano_passado') return `Ano de ${start.getFullYear()}`;
   if (start.getFullYear() === end.getFullYear() && start.getMonth() === end.getMonth()) return mesAnoLabel(start);
@@ -578,8 +597,20 @@ function getPreviousPeriodRange(period) {
       const m = addMonths(today, -2);
       return { start: startOfMonth(m), end: endOfMonth(m) };
     }
+    // Ontem, pra "hoje" ter com o que se comparar.
+    case 'hoje': {
+      const o = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+      return { start: o, end: new Date(o.getFullYear(), o.getMonth(), o.getDate(), 23, 59, 59, 999) };
+    }
     case 'ultimos_3':
+    case 'ultimo_trimestre':
       return { start: startOfMonth(addMonths(today, -5)), end: endOfMonth(addMonths(today, -3)) };
+    case 'ultimo_semestre':
+      return { start: startOfMonth(addMonths(today, -11)), end: endOfMonth(addMonths(today, -6)) };
+    case 'proximo_trimestre':
+      return { start: startOfMonth(addMonths(today, -3)), end: endOfMonth(addMonths(today, -1)) };
+    case 'proximo_semestre':
+      return { start: startOfMonth(addMonths(today, -6)), end: endOfMonth(addMonths(today, -1)) };
     case 'ultimos_12':
       return { start: startOfMonth(addMonths(today, -23)), end: endOfMonth(addMonths(today, -12)) };
     case 'ano_passado':
@@ -886,20 +917,36 @@ function contratosParados(linhas) {
   return (linhas || []).filter((l) => l.recorrente && (l.mesesParado || 0) >= MESES_PARA_CONTRATO_PARADO);
 }
 
-// Cancelamentos de recorrências por mês, últimos N meses.
-function buildCancelamentosPorMes(transactions, monthsBack) {
-  const today = new Date();
+// Cancelamentos mês a mês dentro do período escolhido. Conta qualquer coisa
+// com data de cancelamento — não só recorrência —, e devolve também o valor
+// que deixou de entrar: perder um contrato de R$ 3.000 e um de R$ 80 são fatos
+// muito diferentes, e a contagem sozinha esconde isso.
+function buildCancelamentosPorMes(transactions, rangeStart, rangeEnd) {
   const rows = [];
-  for (let i = monthsBack - 1; i >= 0; i -= 1) {
-    const m = addMonths(startOfMonth(today), -i);
-    const rs = startOfMonth(m);
-    const re = endOfMonth(m);
-    const count = transactions.filter((t) => {
+  let cursor = startOfMonth(rangeStart);
+  let guarda = 0;
+  while (cursor <= rangeEnd && guarda < 240) {
+    // Recorta o primeiro e o último mês nas datas exatas do período: com
+    // "Hoje" selecionado, contar o mês inteiro mostraria cancelamentos que não
+    // são de hoje.
+    const inicioMes = startOfMonth(cursor);
+    const fimMes = endOfMonth(cursor);
+    const rs = inicioMes > rangeStart ? inicioMes : rangeStart;
+    const re = fimMes < rangeEnd ? fimMes : rangeEnd;
+    const doMes = transactions.filter((t) => {
       if (!t.dataCancelamento) return false;
       const d = parseISODate(t.dataCancelamento);
       return d >= rs && d <= re;
-    }).length;
-    rows.push({ key: monthKey(m), label: monthLabel(m), count });
+    });
+    rows.push({
+      key: monthKey(cursor),
+      label: monthLabel(cursor),
+      count: doMes.length,
+      recorrentes: doMes.filter((t) => t.recorrente).length,
+      valor: round2(doMes.reduce((s, t) => s + (Number(t.valor) || 0), 0)),
+    });
+    cursor = addMonths(cursor, 1);
+    guarda += 1;
   }
   return rows;
 }
@@ -1292,15 +1339,21 @@ function CategoryRow({ cat, last, onEdit, onDelete }) {
 
 // Ordem cronológica: passado à esquerda, este mês pré-selecionado no meio,
 // futuro à direita — assim como pedido.
+// Ordem cronológica: o que já passou à esquerda, hoje no meio, o que vem pela
+// frente à direita. "Este mês" é o padrão e fica ao lado de "Hoje" porque são
+// as duas perguntas do dia a dia; trimestre e semestre são análise.
+//
+// O rótulo de "mes" e "ano" é montado no PeriodSelector: vira "Este mês"/
+// "Este ano" no mês/ano corrente e passa a nomear o mês/ano quando as setas
+// navegam pra outro.
 const PERIOD_PRESETS_PADRAO = [
-  { key: 'ultimos_3', label: 'Últimos 3 meses' },
-  // O rótulo de "mes" e "ano" é montado no PeriodSelector: vira "Este mês"/
-  // "Este ano" no mês/ano corrente e passa a nomear o mês/ano quando as setas
-  // navegam pra outro.
+  { key: 'ultimo_semestre', label: 'Último semestre' },
+  { key: 'ultimo_trimestre', label: 'Último trimestre' },
+  { key: 'hoje', label: 'Hoje' },
   { key: 'mes', label: 'Este mês' },
-  { key: 'proximos_3', label: 'Próx. 3 meses' },
-  { key: 'proximos_6', label: 'Próx. 6 meses' },
   { key: 'ano', label: 'Este ano' },
+  { key: 'proximo_trimestre', label: 'Próximo trimestre' },
+  { key: 'proximo_semestre', label: 'Próximo semestre' },
   { key: 'custom', label: 'Personalizado' },
 ];
 
@@ -1308,9 +1361,11 @@ const PERIOD_PRESETS_PADRAO = [
 // fechado (mês passado, 12 meses, ano fechado), sem as janelas futuras que o
 // painel Início usa pra projeção.
 const PERIOD_PRESETS_RELATORIO = [
-  { key: 'mes', label: 'Este mês' },
-  { key: 'ultimos_3', label: 'Últimos 3 meses' },
   { key: 'ultimos_12', label: 'Últimos 12 meses' },
+  { key: 'ultimo_semestre', label: 'Último semestre' },
+  { key: 'ultimo_trimestre', label: 'Último trimestre' },
+  { key: 'hoje', label: 'Hoje' },
+  { key: 'mes', label: 'Este mês' },
   { key: 'ano', label: 'Este ano' },
   { key: 'custom', label: 'Personalizado' },
 ];
@@ -2542,12 +2597,16 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
   const ticketPorProduto = topProdutos.filter((p) => p.ticket != null).sort((a, b) => b.ticket - a.ticket);
 
   // Visão geral da empresa (somente admin): evolução, crescimento, cancelamentos e ranking.
-  const evolution = buildCompanyEvolution(txs, 6);
+  // Evolução e cancelamentos seguem a mesma janela do resto do painel. Antes
+  // eram 6 meses fixos: trocar o período no topo não mexia nesses dois blocos,
+  // e o usuário via números de janelas diferentes lado a lado.
+  const evolution = buildCompanyEvolution(txs, chartWindow.back, chartWindow.forward);
   const lastM = evolution[evolution.length - 1];
   const prevM = evolution[evolution.length - 2];
   const growthPct = (prevM && prevM.receita > 0) ? round2(((lastM.receita - prevM.receita) / prevM.receita) * 100) : null;
-  const cancelamentos = buildCancelamentosPorMes(txs, 6);
-  const totalCancelamentos6m = cancelamentos.reduce((s, c) => s + c.count, 0);
+  const cancelamentos = buildCancelamentosPorMes(txs, range.start, range.end);
+  const totalCancelamentos = cancelamentos.reduce((s, c) => s + c.count, 0);
+  const valorCancelado = round2(cancelamentos.reduce((s, c) => s + c.valor, 0));
   // Só vendedores ativos entram no ranking — os inativos do cadastro são
   // ex-funcionários e colaboradores de outras funções, não vendedores.
   const ranking = buildVendedorRanking(txs, data.vendedores.filter((v) => v.ativo !== false), range.start, range.end, data.planos);
@@ -2902,7 +2961,7 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
 
               {widgets.categorias && (
                 <>
-                  <SectionTitle icon={Tag}>Gastos por categoria</SectionTitle>
+                  <SectionTitle icon={Tag}>Gastos por categoria · {periodLabel(period)}</SectionTitle>
                   <CategoryPieCard pieData={pieData} />
                 </>
               )}
@@ -2941,7 +3000,7 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
                   <SectionTitle icon={TrendingUp}>Evolução da empresa</SectionTitle>
                   <Card>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <div style={{ fontSize: 'var(--fs-small)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)' }}>Receita x despesa · 6 meses</div>
+                      <div style={{ fontSize: 'var(--fs-small)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-soft)' }}>Receita x despesa · {periodLabel(period)}</div>
                       {growthPct !== null && (
                         <div style={{ fontSize: 12, fontWeight: 700, color: growthPct >= 0 ? 'var(--positive)' : 'var(--negative)', display: 'flex', alignItems: 'center', gap: 3 }}>
                           {growthPct >= 0 ? '↑' : '↓'} {Math.abs(growthPct)}% vs mês passado
@@ -2992,19 +3051,28 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
 
               {widgets.cancelamentos && (
                 <>
-                  <SectionTitle icon={X}>Cancelamentos de recorrência</SectionTitle>
+                  <SectionTitle icon={X}>Cancelamentos · {periodLabel(period)}</SectionTitle>
                   <Card>
-                    {totalCancelamentos6m === 0 ? (
-                      <p style={{ fontSize: 13, color: 'var(--ink-soft)', margin: 0 }}>Nenhuma recorrência cancelada nos últimos 6 meses.</p>
+                    {totalCancelamentos === 0 ? (
+                      <p style={{ fontSize: 13, color: 'var(--ink-soft)', margin: 0 }}>Nenhum cancelamento em {periodLabel(period)}.</p>
                     ) : (
                       <>
-                        <div style={{ fontSize: 13, marginBottom: 8 }}><strong>{totalCancelamentos6m}</strong> cancelamento(s) nos últimos 6 meses</div>
+                        {/* O valor perdido vem antes da contagem: perder um
+                            contrato de R$ 3.000 e um de R$ 80 são fatos muito
+                            diferentes, e só o número esconde isso. */}
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                          <span style={{ fontSize: 20, fontWeight: 800, color: 'var(--negative)' }}>{formatCurrency(valorCancelado)}</span>
+                          <span style={{ fontSize: 13, color: 'var(--ink-soft)' }}>
+                            deixaram de entrar · <strong>{totalCancelamentos}</strong> cancelamento(s)
+                            {cancelamentos.some((c) => c.recorrentes > 0) && ` · ${cancelamentos.reduce((s, c) => s + c.recorrentes, 0)} de contrato recorrente`}
+                          </span>
+                        </div>
                         <ResponsiveContainer width="100%" height={90}>
                           <BarChart data={cancelamentos} margin={{ top: 0, right: 8, left: -30, bottom: 0 }}>
                             <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                            <YAxis tick={{ fontSize: 11 }} width={30} allowDecimals={false} />
-                            <Tooltip />
-                            <Bar dataKey="count" name="Cancelamentos" fill="var(--negative)" radius={[4, 4, 0, 0]} />
+                            <YAxis tick={{ fontSize: 11 }} width={30} tickFormatter={(v) => (v >= 1000 ? `${Math.round(v / 1000)}k` : v)} />
+                            <Tooltip formatter={(v, n) => (n === 'Valor perdido' ? formatCurrency(v) : v)} />
+                            <Bar dataKey="valor" name="Valor perdido" fill="var(--negative)" radius={[4, 4, 0, 0]} />
                           </BarChart>
                         </ResponsiveContainer>
                       </>
