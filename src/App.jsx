@@ -2391,6 +2391,11 @@ function CategoryPieCard({ pieData }) {
   );
 }
 
+// Cartões do topo que abrem a lista dos lançamentos por trás do número.
+// Resultado entra junto: quem clica nele quer ver de onde veio o saldo, e a
+// lista dos dois lados é o que explica isso.
+const FOCOS_COM_LISTA = ['receitas', 'despesas', 'resultado'];
+
 function DashboardCustomizeModal({ widgets, onToggle, onClose }) {
   const items = [
     { key: 'categorias', label: 'Gastos por categoria', icon: Tag },
@@ -2475,10 +2480,14 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
   // o valor já multiplicado pelas cobranças que caem no período (mesma conta
   // que soma o cartão), e a etiqueta "×N" avisa quando não é uma cobrança só.
   const linhasFocoPeriodo = useMemo(() => {
-    if (focusMetric !== 'receitas' && focusMetric !== 'despesas') return [];
-    const tipoFoco = focusMetric === 'receitas' ? 'receita' : 'despesa';
+    if (!FOCOS_COM_LISTA.includes(focusMetric)) return [];
+    // Resultado é receita menos despesa, então a lista dele mostra os dois
+    // lados — é o único jeito de o total da lista fechar com o cartão.
+    const tipos = focusMetric === 'resultado'
+      ? ['receita', 'despesa']
+      : [focusMetric === 'receitas' ? 'receita' : 'despesa'];
     return txs
-      .filter((t) => t.tipo === tipoFoco)
+      .filter((t) => tipos.includes(t.tipo))
       .map((t) => {
         const ocorrencias = expandOccurrences(t, range.start, range.end).length;
         return ocorrencias > 0 ? { tx: t, ocorrencias, valorNoPeriodo: round2(t.valor * ocorrencias) } : null;
@@ -2487,6 +2496,9 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
       .sort((a, b) => (b.tx.data || '').localeCompare(a.tx.data || ''));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [txs, focusMetric, range.start, range.end]);
+
+  const rotuloFoco = { receitas: 'receita', despesas: 'despesa', resultado: 'receita e despesa' }[focusMetric];
+  const totalFoco = focusMetric === 'receitas' ? receitas.total : focusMetric === 'despesas' ? despesas.total : saldo;
 
   // Ranking de produtos/serviços do período (por categoria de receita), do mais
   // vendido ao menos vendido. Ordena por valor faturado, não por quantidade.
@@ -2715,11 +2727,11 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
           explícito de abrir/fechar, não só cor de destaque no cartão. Só os
           lançamentos com ocorrência no período escolhido, nada de período
           anterior nem projeção fora do intervalo. */}
-      {(focusMetric === 'receitas' || focusMetric === 'despesas') && (
+      {FOCOS_COM_LISTA.includes(focusMetric) && (
         <Card style={{ padding: 0, marginTop: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
             <div style={{ fontWeight: 700, fontSize: 14 }}>
-              {linhasFocoPeriodo.length} lançamento(s) de {focusMetric === 'receitas' ? 'receita' : 'despesa'} · {periodLabel(period)}
+              {linhasFocoPeriodo.length} lançamento(s) de {rotuloFoco} · {periodLabel(period)}
             </div>
             <button
               onClick={() => toggleFocus(focusMetric)}
@@ -2729,6 +2741,17 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
               Recolher <ChevronRight size={14} style={{ transform: 'rotate(-90deg)' }} />
             </button>
           </div>
+
+          {/* O total abre a lista em vez de fechá-la: é o número que a pessoa
+              veio conferir, e com 40+ linhas ele sumia lá embaixo. */}
+          {linhasFocoPeriodo.length > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', fontWeight: 700, fontSize: 14 }}>
+              <span>Total do período</span>
+              <span style={{ color: focusMetric === 'receitas' ? 'var(--positive)' : focusMetric === 'despesas' ? 'var(--negative)' : totalFoco >= 0 ? 'var(--primary-text)' : 'var(--negative)' }}>
+                {formatCurrency(totalFoco)}
+              </span>
+            </div>
+          )}
 
           {linhasFocoPeriodo.length === 0 ? (
             <div style={{ padding: 16, fontSize: 'var(--fs-body)', color: 'var(--ink-soft)' }}>Nada neste período.</div>
@@ -2756,8 +2779,10 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
                         {cat ? ` · ${cat.nome}` : ''}{ocorrencias > 1 ? ` · ${ocorrencias}x no período` : ''}
                       </div>
                     </div>
-                    <div style={{ fontWeight: 700, fontSize: 14, color: focusMetric === 'receitas' ? 'var(--positive)' : 'var(--negative)', whiteSpace: 'nowrap' }}>
-                      {formatCurrency(valorNoPeriodo)}
+                    {/* Na lista do Resultado a cor vem do próprio lançamento,
+                        não do cartão — receita e despesa convivem ali. */}
+                    <div style={{ fontWeight: 700, fontSize: 14, color: tx.tipo === 'receita' ? 'var(--positive)' : 'var(--negative)', whiteSpace: 'nowrap' }}>
+                      {tx.tipo === 'receita' ? '' : '− '}{formatCurrency(valorNoPeriodo)}
                     </div>
                   </div>
                 );
@@ -2770,10 +2795,6 @@ function Dashboard({ data, role, currentVendedorId, period, setPeriod, onAddClic
                   Mostrar mais {Math.min(40, linhasFocoPeriodo.length - listaFocoLimite)} de {linhasFocoPeriodo.length - listaFocoLimite} restantes
                 </button>
               )}
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', borderTop: '1px solid var(--border)', background: 'var(--surface-2)', fontWeight: 700, fontSize: 14 }}>
-                <span>Total do período</span>
-                <span>{formatCurrency(focusMetric === 'receitas' ? receitas.total : despesas.total)}</span>
-              </div>
             </>
           )}
         </Card>
